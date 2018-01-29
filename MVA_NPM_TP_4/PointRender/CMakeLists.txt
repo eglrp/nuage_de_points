@@ -23,6 +23,6 @@ file(GLOB SRCS
 	"*.cpp"
 )
 
-add_executable(PointRender ${SRCS} ${MOCS})
+add_executable(PointRender ${SRCS} ${HDRS})
 
 target_link_libraries(PointRender ${OPENGL_LIBRARIES} ${GLUT_LIBRARY} )

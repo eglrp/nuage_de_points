@@ -40,7 +40,7 @@ static Camera camera;
 static bool mouseRotatePressed = false;
 static bool mouseMovePressed = false;
 static bool mouseZoomPressed = false;
-static int lastX=0, lastY=0, lastZoom=0;
+static int lastX = 0, lastY = 0, lastZoom = 0;
 static unsigned int FPS = 0;
 static bool fullScreen = false;
 
@@ -67,37 +67,37 @@ static float alpha;
 // App Code.
 // -------------------------------------------
 
-void printUsage () {
-    cerr << endl 
-         << "PointRender: a basic point cloud rendering app." << endl
-         << "Author : Tamy Boubekeur (http://www.telecom-paristech.fr/~boubek)" << endl << endl
-         << "Usage : ./PointRender [<file.pn>]" << endl
-         << "PN format : binary file made of a list of 6 floats chunk:" << endl
-         << "   x0,y0,z0,nx0,ny0,nz0, x1,y1,z1,nx1,ny1,nz1,..." << endl
-         << "with {x,y,z} the position and {nx,ny,nz} the normal vector of each point sample" << endl
-         << "Keyboard commands" << endl 
-         << "------------------" << endl
-         << " ?: Print help" << endl 
-         << " f: Toggle full screen mode" << endl
-         << " +/-: Increase/Decrease screen point size" << endl
-         << " <drag>+<left button>: rotate model" << endl 
-         << " <drag>+<right button>: move model" << endl
-         << " <drag>+<middle button>: zoom" << endl
-         << " q, <esc>: Quit" << endl << endl; 
+void printUsage() {
+    cerr << endl
+        << "PointRender: a basic point cloud rendering app." << endl
+        << "Author : Tamy Boubekeur (http://www.telecom-paristech.fr/~boubek)" << endl << endl
+        << "Usage : ./PointRender [<file.pn>]" << endl
+        << "PN format : binary file made of a list of 6 floats chunk:" << endl
+        << "   x0,y0,z0,nx0,ny0,nz0, x1,y1,z1,nx1,ny1,nz1,..." << endl
+        << "with {x,y,z} the position and {nx,ny,nz} the normal vector of each point sample" << endl
+        << "Keyboard commands" << endl
+        << "------------------" << endl
+        << " ?: Print help" << endl
+        << " f: Toggle full screen mode" << endl
+        << " +/-: Increase/Decrease screen point size" << endl
+        << " <drag>+<left button>: rotate model" << endl
+        << " <drag>+<right button>: move model" << endl
+        << " <drag>+<middle button>: zoom" << endl
+        << " q, <esc>: Quit" << endl << endl;
 }
 
-void usage () {
-    printUsage ();
-    exit (EXIT_FAILURE);
+void usage() {
+    printUsage();
+    exit(EXIT_FAILURE);
 }
 
-void init (const string & modelFilename) {
-    camera.resize (SCREENWIDTH, SCREENHEIGHT);
-    pointCloud.loadPN (modelFilename);
-    ambientLightColor = Vec3f (0.0f, 0.1f, 0.4f);
+void init(const string & modelFilename) {
+    camera.resize(SCREENWIDTH, SCREENHEIGHT);
+    pointCloud.loadPN(modelFilename);
+    ambientLightColor = Vec3f(0.6f, 0.6f, 0.6f);
     ambientLightCoeff = 0.3f;
 
-    matDiffuseColor = Vec3f(.0f, .8f, .0f);
+    matDiffuseColor = Vec3f(.8f, .8f, .8f);
     matDiffuseCoeff = .3f;
 
     matSpecularColor = Vec3f(.8f, .8f, .8f);
@@ -105,40 +105,40 @@ void init (const string & modelFilename) {
     matSpecularShininess = 8.0f;
 
 
-    lightPos[0] = Vec3f (2.f, -2.f, -2.f);
-    lightColor[0] = Vec3f (0.8f, 0.5f, 0.f);
-    lightPos[1] = Vec3f (-2.f, -2.f, 0.f);
-    lightColor[1] = Vec3f (0.2f, 0.7f, 0.2f);
-    lightPos[2] = Vec3f (-2.f, 2.f, 2.f);
-    lightColor[2] = Vec3f (0.1f, 0.5f, 0.8f);
+    lightPos[0] = Vec3f(2.f, -2.f, -2.f);
+    lightColor[0] = Vec3f(0.8f, 0.5f, 0.f);
+    lightPos[1] = Vec3f(-2.f, -2.f, 0.f);
+    lightColor[1] = Vec3f(0.2f, 0.7f, 0.2f);
+    lightPos[2] = Vec3f(-2.f, 2.f, 2.f);
+    lightColor[2] = Vec3f(0.1f, 0.5f, 0.8f);
     alpha = 0.3;
-    glCullFace (GL_BACK);
-    glEnable (GL_CULL_FACE);
-    glDepthFunc (GL_LESS);
-    glEnable (GL_DEPTH_TEST);
+    glCullFace(GL_BACK);
+    glEnable(GL_CULL_FACE);
+    glDepthFunc(GL_LESS);
+    glEnable(GL_DEPTH_TEST);
     glHint(GL_POINT_SMOOTH_HINT, GL_NICEST);
-    glEnable (GL_POINT_SMOOTH);
-    glClearColor (0.0f, 0.0f, 0.0f, 1.0f);
+    glEnable(GL_POINT_SMOOTH);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 }
 
-void render () {
-    glLoadIdentity ();
-    glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    camera.apply ();
-    glPointSize (pointSize);
-    glBegin (GL_POINTS);
+void render() {
+    glLoadIdentity();
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    camera.apply();
+    glPointSize(pointSize);
+    glBegin(GL_POINTS);
     Vec3f eye;
-    camera.getPos (eye[0], eye[1], eye[2]);
-    for (unsigned int i = 0; i < pointCloud.size (); i++)  {
-        const PointCloud::Point & point = pointCloud (i);
-        const Vec3f & p = point.position ();
-        const Vec3f & n = point.normal ();
+    camera.getPos(eye[0], eye[1], eye[2]);
+    for (unsigned int i = 0; i < pointCloud.size(); i++) {
+        const PointCloud::Point & point = pointCloud(i);
+        const Vec3f & p = point.position();
+        const Vec3f & n = point.normal();
         //Vec3f rgb (1.f, 1.f, 1.f); // Color response of the point sample
         // ------ A REMPLIR -----------
         float y = p[1];
         y = std::max(std::min(y, 1.f), -1.f);
         y = (y + 1.f) / 2.f;
-        Vec3f color_object = Vec3f(y, 0.f, 1.f-y);
+        Vec3f color_object = Vec3f(y, 0.f, 1.f - y);
 
         Vec3f ambient = ambientLightColor*ambientLightCoeff;
 
@@ -147,49 +147,52 @@ void render () {
         Vec3f N = normalize(n);
         for (int i = 0; i < 3; i++) {
             Vec3f L = normalize(lightPos[i] - p);
-            diffuse += dot(L, N) * matDiffuseColor * lightColor[i];
+            diffuse += std::max(dot(L, N), 0.f) * lightColor[i];
             Vec3f V = normalize(eye - p);
             Vec3f H = normalize(V + L);
-            specular += std::pow(dot(N, H), matSpecularShininess) *  matSpecularColor * lightColor[i];
+            specular += std::pow(std::max(dot(N, H), 0.0f), matSpecularShininess) * lightColor[i];
         }
 
-        Vec3f rgb = ambient*color_object + diffuse + specular;
+        Vec3f rgb =
+            ambient * color_object +
+            diffuse * matDiffuseCoeff * matDiffuseColor +
+            specular * matSpecularCoeff * matSpecularColor;
 
-        
+
         // ----------------------------
-        glColor3f (rgb[0], rgb[1], rgb[2]);
-        glVertex3f (p[0], p[1], p[2]);	
+        glColor3f(rgb[0], rgb[1], rgb[2]);
+        glVertex3f(p[0], p[1], p[2]);
     }
-    glEnd ();
-    glutSwapBuffers ();
+    glEnd();
+    glutSwapBuffers();
 }
 
-void idle () {
-    static float lastTime = glutGet ((GLenum)GLUT_ELAPSED_TIME);
+void idle() {
+    static float lastTime = glutGet((GLenum)GLUT_ELAPSED_TIME);
     static unsigned int counter = 0;
     counter++;
-    float currentTime = glutGet ((GLenum)GLUT_ELAPSED_TIME);
+    float currentTime = glutGet((GLenum)GLUT_ELAPSED_TIME);
     if (currentTime - lastTime >= 1000.0f) {
         FPS = counter;
         counter = 0;
-        static char winTitle [64];
-        sprintf (winTitle, "PointRender - Num. Of Points: %d - FPS: %d", pointCloud.size (), FPS);
-        glutSetWindowTitle (winTitle);
+        static char winTitle[64];
+        sprintf(winTitle, "PointRender - Num. Of Points: %d - FPS: %d", pointCloud.size(), FPS);
+        glutSetWindowTitle(winTitle);
         lastTime = currentTime;
     }
-    glutPostRedisplay ();
+    glutPostRedisplay();
 }
 
-void key (unsigned char keyPressed, int x, int y) {
+void key(unsigned char keyPressed, int x, int y) {
     switch (keyPressed) {
     case 'f':
         if (fullScreen == true) {
-            glutReshapeWindow (SCREENWIDTH, SCREENHEIGHT);
+            glutReshapeWindow(SCREENWIDTH, SCREENHEIGHT);
             fullScreen = false;
         } else {
-            glutFullScreen ();
+            glutFullScreen();
             fullScreen = true;
-        }      
+        }
         break;
     case '+':
         pointSize += 1.0f;
@@ -199,32 +202,64 @@ void key (unsigned char keyPressed, int x, int y) {
             pointSize -= 1.0f;
         break;
     case '*':
-        if (alpha  < 1.0)
+        if (alpha < 1.0)
             alpha += 0.1f;
         break;
     case '/':
         if (alpha > 0.0f)
             alpha -= 0.1f;
         break;
+    case 'w':
+        ambientLightCoeff += 0.1;
+        std::cout << "ambientLightCoeff = " << ambientLightCoeff << std::endl;
+        break;
+    case 's':
+        ambientLightCoeff -= 0.1;
+        std::cout << "ambientLightCoeff = " << ambientLightCoeff << std::endl;
+        break;
+    case 'd':
+        matDiffuseCoeff += 0.1;
+        std::cout << "matDiffuseCoeff = " << matDiffuseCoeff << std::endl;
+        break;
+    case 'a':
+        matDiffuseCoeff -= 0.1;
+        std::cout << "matDiffuseCoeff = " << matDiffuseCoeff << std::endl;
+        break;
+    case 'x':
+        matSpecularCoeff += 0.1;
+        std::cout << "matSpecularCoeff = " << matSpecularCoeff << std::endl;
+        break;
+    case 'z':
+        matSpecularCoeff -= 0.1;
+        std::cout << "matSpecularCoeff = " << matSpecularCoeff << std::endl;
+        break;
+    case 'r':
+        matSpecularShininess *= 2.;
+        std::cout << "matSpecularShininess = " << matSpecularShininess << std::endl;
+        break;
+    case 'e':
+        matSpecularShininess /= 2.;
+        std::cout << "matSpecularShininess = " << matSpecularShininess << std::endl;
+        break;
     case 'q':
     case 27:
-        exit (0);
+        exit(0);
         break;
     default:
-        printUsage ();
+        printUsage();
         break;
     }
-    idle ();
+    idle();
 }
 
-void mouse (int button, int state, int x, int y) {
+void mouse(int button, int state, int x, int y) {
     if (state == GLUT_UP) {
         mouseMovePressed = false;
         mouseRotatePressed = false;
         mouseZoomPressed = false;
     } else {
         if (button == GLUT_LEFT_BUTTON) {
-            camera.beginRotate (x, y);
+            camera.beginRotate(x, y);
             mouseMovePressed = false;
             mouseRotatePressed = true;
             mouseZoomPressed = false;
@@ -243,51 +278,49 @@ void mouse (int button, int state, int x, int y) {
             }
         }
     }
-    idle ();
+    idle();
 }
 
-void motion (int x, int y) {
+void motion(int x, int y) {
     if (mouseRotatePressed == true) {
-        camera.rotate (x, y);
-    }
-    else if (mouseMovePressed == true) {
-        camera.move ((x-lastX)/static_cast<float>(SCREENWIDTH), (lastY-y)/static_cast<float>(SCREENHEIGHT), 0.0);
+        camera.rotate(x, y);
+    } else if (mouseMovePressed == true) {
+        camera.move((x - lastX) / static_cast<float>(SCREENWIDTH), (lastY - y) / static_cast<float>(SCREENHEIGHT), 0.0);
         lastX = x;
         lastY = y;
-    }
-    else if (mouseZoomPressed == true) {
-        camera.zoom (float (y-lastZoom)/SCREENHEIGHT);
+    } else if (mouseZoomPressed == true) {
+        camera.zoom(float(y - lastZoom) / SCREENHEIGHT);
         lastZoom = y;
     }
 }
 
 void reshape(int w, int h) {
-    camera.resize (w, h);
+    camera.resize(w, h);
 }
 
-int main (int argc, char ** argv) {
+int main(int argc, char ** argv) {
     if (argc > 2) {
-        printUsage ();
-        exit (EXIT_FAILURE);
+        printUsage();
+        exit(EXIT_FAILURE);
     }
-    glutInit (&argc, argv);
-    glutInitDisplayMode (GLUT_RGBA | GLUT_DEPTH | GLUT_DOUBLE);
-    glutInitWindowSize (SCREENWIDTH, SCREENHEIGHT);
-    window = glutCreateWindow ("PointRender");
+    glutInit(&argc, argv);
+    glutInitDisplayMode(GLUT_RGBA | GLUT_DEPTH | GLUT_DOUBLE);
+    glutInitWindowSize(SCREENWIDTH, SCREENHEIGHT);
+    window = glutCreateWindow("PointRender");
     //try {
-        init (argc == 2 ? string (argv[1]) : string ("data/face.pn"));
+    init(argc == 2 ? string(argv[1]) : string("data/face.pn"));
     //} catch (const Exception & e) {
     //    cerr << "Error at initialization: " << e.message () << endl;
     //    exit (1);
     //};
-    glutIdleFunc (idle);
-    glutDisplayFunc (render);
-    glutKeyboardFunc (key);
-    glutReshapeFunc (reshape);
-    glutMotionFunc (motion);
-    glutMouseFunc (mouse);
-    key ('?', 0, 0);   
-    glutMainLoop ();
+    glutIdleFunc(idle);
+    glutDisplayFunc(render);
+    glutKeyboardFunc(key);
+    glutReshapeFunc(reshape);
+    glutMotionFunc(motion);
+    glutMouseFunc(mouse);
+    key('?', 0, 0);
+    glutMainLoop();
     return EXIT_SUCCESS;
 }
 
