@@ -54,6 +54,13 @@ static float ambientLightCoeff;
 static Vec3f lightPos[3];
 static Vec3f lightColor[3];
 
+static Vec3f matDiffuseColor;
+static float matDiffuseCoeff;
+
+static Vec3f matSpecularColor;
+static float matSpecularShininess;
+static float matSpecularCoeff;
+
 static float alpha;
 
 // -------------------------------------------
@@ -88,7 +95,16 @@ void init (const string & modelFilename) {
     camera.resize (SCREENWIDTH, SCREENHEIGHT);
     pointCloud.loadPN (modelFilename);
     ambientLightColor = Vec3f (0.0f, 0.1f, 0.4f);
-    ambientLightCoeff = 0.2f;
+    ambientLightCoeff = 0.3f;
+
+    matDiffuseColor = Vec3f(.0f, .8f, .0f);
+    matDiffuseCoeff = .3f;
+
+    matSpecularColor = Vec3f(.8f, .8f, .8f);
+    matSpecularCoeff = .7f;
+    matSpecularShininess = 8.0f;
+
+
     lightPos[0] = Vec3f (2.f, -2.f, -2.f);
     lightColor[0] = Vec3f (0.8f, 0.5f, 0.f);
     lightPos[1] = Vec3f (-2.f, -2.f, 0.f);
@@ -117,9 +133,29 @@ void render () {
         const PointCloud::Point & point = pointCloud (i);
         const Vec3f & p = point.position ();
         const Vec3f & n = point.normal ();
-        Vec3f rgb (1.f, 1.f, 1.f); // Color response of the point sample
+        //Vec3f rgb (1.f, 1.f, 1.f); // Color response of the point sample
         // ------ A REMPLIR -----------
+        float y = p[1];
+        y = std::max(std::min(y, 1.f), -1.f);
+        y = (y + 1.f) / 2.f;
+        Vec3f color_object = Vec3f(y, 0.f, 1.f-y);
 
+        Vec3f ambient = ambientLightColor*ambientLightCoeff;
+
+        Vec3f diffuse(0.f, 0.f, 0.f);
+        Vec3f specular(0.f, 0.f, 0.f);
+        Vec3f N = normalize(n);
+        for (int i = 0; i < 3; i++) {
+            Vec3f L = normalize(lightPos[i] - p);
+            diffuse += dot(L, N) * matDiffuseColor * lightColor[i];
+            Vec3f V = normalize(eye - p);
+            Vec3f H = normalize(V + L);
+            specular += std::pow(dot(N, H), matSpecularShininess) *  matSpecularColor * lightColor[i];
+        }
+
+        Vec3f rgb = ambient*color_object + diffuse + specular;
+
+        
         // ----------------------------
         glColor3f (rgb[0], rgb[1], rgb[2]);
         glVertex3f (p[0], p[1], p[2]);	
