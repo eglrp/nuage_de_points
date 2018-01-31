@@ -63,6 +63,8 @@ static float matSpecularCoeff;
 
 static float alpha;
 
+static bool useLightOpenGL;
+
 // -------------------------------------------
 // App Code.
 // -------------------------------------------
@@ -83,7 +85,13 @@ void printUsage() {
         << " <drag>+<left button>: rotate model" << endl
         << " <drag>+<right button>: move model" << endl
         << " <drag>+<middle button>: zoom" << endl
-        << " q, <esc>: Quit" << endl << endl;
+        << " q, <esc>: Quit" << endl
+        << " w/s : Increase/Decrease ambientLightCoeff " << endl
+        << " d/a : Increase/Decrease matDiffuseCoeff " << endl
+        << " x/z : Increase/Decrease matSpecularCoeff " << endl
+        << " r/e : Increase/Decrease matSpecularShininess " << endl
+        << " g : Switch between manuel lighting and OpenGL lighting" << endl
+        << endl;
 }
 
 void usage() {
@@ -98,19 +106,21 @@ void init(const string & modelFilename) {
     ambientLightCoeff = 0.3f;
 
     matDiffuseColor = Vec3f(.8f, .8f, .8f);
-    matDiffuseCoeff = .3f;
+    matDiffuseCoeff = .5f;
 
     matSpecularColor = Vec3f(.8f, .8f, .8f);
     matSpecularCoeff = .7f;
     matSpecularShininess = 8.0f;
 
+    useLightOpenGL = false;
+
 
     lightPos[0] = Vec3f(2.f, -2.f, -2.f);
-    lightColor[0] = Vec3f(0.8f, 0.5f, 0.f);
+    lightColor[0] = Vec3f(0.8f, 0.0f, 0.f);
     lightPos[1] = Vec3f(-2.f, -2.f, 0.f);
-    lightColor[1] = Vec3f(0.2f, 0.7f, 0.2f);
+    lightColor[1] = Vec3f(0.f, 0.7f, 0.f);
     lightPos[2] = Vec3f(-2.f, 2.f, 2.f);
-    lightColor[2] = Vec3f(0.1f, 0.5f, 0.8f);
+    lightColor[2] = Vec3f(0.f, 0.5f, 1.f);
     alpha = 0.3;
     glCullFace(GL_BACK);
     glEnable(GL_CULL_FACE);
@@ -122,48 +132,89 @@ void init(const string & modelFilename) {
 }
 
 void render() {
+    glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     camera.apply();
-    glPointSize(pointSize);
-    glBegin(GL_POINTS);
-    Vec3f eye;
-    camera.getPos(eye[0], eye[1], eye[2]);
-    for (unsigned int i = 0; i < pointCloud.size(); i++) {
-        const PointCloud::Point & point = pointCloud(i);
-        const Vec3f & p = point.position();
-        const Vec3f & n = point.normal();
-        //Vec3f rgb (1.f, 1.f, 1.f); // Color response of the point sample
-        // ------ A REMPLIR -----------
-        float y = p[1];
-        y = std::max(std::min(y, 1.f), -1.f);
-        y = (y + 1.f) / 2.f;
-        Vec3f color_object = Vec3f(y, 0.f, 1.f - y);
+    if (useLightOpenGL) {
+        glEnable(GL_LIGHTING);
+        glDisable(GL_COLOR_MATERIAL);
+        glLightModeli(GL_LIGHT_MODEL_LOCAL_VIEWER, GL_TRUE); // realistic specular light
 
-        Vec3f ambient = ambientLightColor*ambientLightCoeff;
+        GLfloat ambient[] = { ambientLightColor[0], ambientLightColor[1], ambientLightColor[2], 1.0 };
+        glLightModelfv(GL_LIGHT_MODEL_AMBIENT, ambient);
 
-        Vec3f diffuse(0.f, 0.f, 0.f);
-        Vec3f specular(0.f, 0.f, 0.f);
-        Vec3f N = normalize(n);
+        GLenum lights[] = { GL_LIGHT0, GL_LIGHT1, GL_LIGHT2 };
         for (int i = 0; i < 3; i++) {
-            Vec3f L = normalize(lightPos[i] - p);
-            diffuse += std::max(dot(L, N), 0.f) * lightColor[i];
-            Vec3f V = normalize(eye - p);
-            Vec3f H = normalize(V + L);
-            specular += std::pow(std::max(dot(N, H), 0.0f), matSpecularShininess) * lightColor[i];
+            GLfloat color[] = { lightColor[i][0], lightColor[i][1],lightColor[i][2], 1.0 };
+            glLightfv(lights[i], GL_DIFFUSE, color);
+            glLightfv(lights[i], GL_SPECULAR, color);
+            GLfloat pos[] = { lightPos[i][0], lightPos[i][1],lightPos[i][2], 0.0 };
+            glLightfv(lights[i], GL_POSITION, pos);
+            glEnable(lights[i]);
         }
 
-        Vec3f rgb =
-            ambient * color_object +
-            diffuse * matDiffuseCoeff * matDiffuseColor +
-            specular * matSpecularCoeff * matSpecularColor;
+        Vec3f matDiffuse = matDiffuseColor*matDiffuseCoeff;
+        GLfloat matDiffuseRGBA[] = { matDiffuse[0], matDiffuse[1], matDiffuse[2], 1.0 };
+        glMaterialfv(GL_FRONT, GL_DIFFUSE, matDiffuseRGBA);
+        Vec3f matSpecular = matSpecularColor*matSpecularCoeff;
+        GLfloat matSpecularRGBA[] = { matSpecular[0], matSpecular[1], matSpecular[2], 1.0 };
+        glMaterialfv(GL_FRONT, GL_SPECULAR, matSpecularRGBA);
+        glMaterialfv(GL_FRONT, GL_SHININESS, &matSpecularShininess);
+
+        glPointSize(pointSize);
+        glBegin(GL_POINTS);
+        for (unsigned int i = 0; i < pointCloud.size(); i++) {
+            const PointCloud::Point & point = pointCloud(i);
+            const Vec3f & p = point.position();
+            const Vec3f & n = point.normal();
+            glNormal3f(n[0], n[1], n[2]);
+            glVertex3f(p[0], p[1], p[2]);
+        }
+        glEnd();
+        glDisable(GL_LIGHTING);
+    } else {
+        glPointSize(pointSize);
+        glBegin(GL_POINTS);
+        Vec3f eye;
+        camera.getPos(eye[0], eye[1], eye[2]);
+        for (unsigned int i = 0; i < pointCloud.size(); i++) {
+            const PointCloud::Point & point = pointCloud(i);
+            const Vec3f & p = point.position();
+            const Vec3f & n = point.normal();
+            //Vec3f rgb (1.f, 1.f, 1.f); // Color response of the point sample
+            // ------ A REMPLIR -----------
+            //float y = p[1];
+            //y = std::max(std::min(y, 1.f), -1.f);
+            //y = (y + 1.f) / 2.f;
+            //Vec3f color_object = Vec3f(y, 0.f, 1.f - y);
+            Vec3f color_object = matDiffuseColor;
+
+            Vec3f ambient = ambientLightColor*ambientLightCoeff;
+
+            Vec3f diffuse(0.f, 0.f, 0.f);
+            Vec3f specular(0.f, 0.f, 0.f);
+            Vec3f N = normalize(n);
+            for (int i = 0; i < 3; i++) {
+                Vec3f L = normalize(lightPos[i] - p);
+                diffuse += std::max(dot(L, N), 0.f) * lightColor[i];
+                Vec3f V = normalize(eye - p);
+                Vec3f H = normalize(V + L);
+                specular += std::pow(std::max(dot(N, H), 0.0f), matSpecularShininess) * lightColor[i];
+            }
+
+            Vec3f rgb =
+                ambient * color_object +
+                diffuse * matDiffuseCoeff * matDiffuseColor +
+                specular * matSpecularCoeff * matSpecularColor;
 
 
-        // ----------------------------
-        glColor3f(rgb[0], rgb[1], rgb[2]);
-        glVertex3f(p[0], p[1], p[2]);
+            // ----------------------------
+            glColor3f(rgb[0], rgb[1], rgb[2]);
+            glVertex3f(p[0], p[1], p[2]);
+        }
+        glEnd();
     }
-    glEnd();
     glutSwapBuffers();
 }
 
@@ -186,7 +237,7 @@ void idle() {
 void key(unsigned char keyPressed, int x, int y) {
     switch (keyPressed) {
     case 'f':
-        if (fullScreen == true) {
+        if (fullScreen) {
             glutReshapeWindow(SCREENWIDTH, SCREENHEIGHT);
             fullScreen = false;
         } else {
@@ -240,6 +291,10 @@ void key(unsigned char keyPressed, int x, int y) {
     case 'e':
         matSpecularShininess /= 2.;
         std::cout << "matSpecularShininess = " << matSpecularShininess << std::endl;
+        break;
+    case 'g':
+        useLightOpenGL = !useLightOpenGL;
+        std::cout << (useLightOpenGL ? " OpenGL lighting " : " manuel lighting ") << std::endl;
         break;
     case 'q':
     case 27:
