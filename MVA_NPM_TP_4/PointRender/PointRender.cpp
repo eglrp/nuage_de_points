@@ -110,7 +110,7 @@ void init(const string & modelFilename) {
 
     matSpecularColor = Vec3f(.8f, .8f, .8f);
     matSpecularCoeff = .7f;
-    matSpecularShininess = 8.0f;
+    matSpecularShininess = 32.0f;
 
     useLightOpenGL = false;
 
@@ -141,7 +141,8 @@ void render() {
         glDisable(GL_COLOR_MATERIAL);
         glLightModeli(GL_LIGHT_MODEL_LOCAL_VIEWER, GL_TRUE); // realistic specular light
 
-        GLfloat ambient[] = { ambientLightColor[0], ambientLightColor[1], ambientLightColor[2], 1.0 };
+        Vec3f lightAmbient = ambientLightColor*ambientLightCoeff;
+        GLfloat ambient[] = { lightAmbient[0], lightAmbient[1], lightAmbient[2], 1.0 };
         glLightModelfv(GL_LIGHT_MODEL_AMBIENT, ambient);
 
         GLenum lights[] = { GL_LIGHT0, GL_LIGHT1, GL_LIGHT2 };
@@ -149,18 +150,18 @@ void render() {
             GLfloat color[] = { lightColor[i][0], lightColor[i][1],lightColor[i][2], 1.0 };
             glLightfv(lights[i], GL_DIFFUSE, color);
             glLightfv(lights[i], GL_SPECULAR, color);
-            GLfloat pos[] = { lightPos[i][0], lightPos[i][1],lightPos[i][2], 0.0 };
+            GLfloat pos[] = { lightPos[i][0], lightPos[i][1],lightPos[i][2], 1.0 };
             glLightfv(lights[i], GL_POSITION, pos);
             glEnable(lights[i]);
         }
 
         Vec3f matDiffuse = matDiffuseColor*matDiffuseCoeff;
         GLfloat matDiffuseRGBA[] = { matDiffuse[0], matDiffuse[1], matDiffuse[2], 1.0 };
-        glMaterialfv(GL_FRONT, GL_DIFFUSE, matDiffuseRGBA);
+        glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE, matDiffuseRGBA);
         Vec3f matSpecular = matSpecularColor*matSpecularCoeff;
         GLfloat matSpecularRGBA[] = { matSpecular[0], matSpecular[1], matSpecular[2], 1.0 };
-        glMaterialfv(GL_FRONT, GL_SPECULAR, matSpecularRGBA);
-        glMaterialfv(GL_FRONT, GL_SHININESS, &matSpecularShininess);
+        glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, matSpecularRGBA);
+        glMaterialfv(GL_FRONT_AND_BACK, GL_SHININESS, &matSpecularShininess);
 
         glPointSize(pointSize);
         glBegin(GL_POINTS);
@@ -188,7 +189,6 @@ void render() {
             //y = std::max(std::min(y, 1.f), -1.f);
             //y = (y + 1.f) / 2.f;
             //Vec3f color_object = Vec3f(y, 0.f, 1.f - y);
-            Vec3f color_object = matDiffuseColor;
 
             Vec3f ambient = ambientLightColor*ambientLightCoeff;
 
@@ -197,14 +197,24 @@ void render() {
             Vec3f N = normalize(n);
             for (int i = 0; i < 3; i++) {
                 Vec3f L = normalize(lightPos[i] - p);
-                diffuse += std::max(dot(L, N), 0.f) * lightColor[i];
-                Vec3f V = normalize(eye - p);
-                Vec3f H = normalize(V + L);
-                specular += std::pow(std::max(dot(N, H), 0.0f), matSpecularShininess) * lightColor[i];
+                float lambertian = std::max(dot(L, N), 0.0f);
+                diffuse += lambertian * lightColor[i];
+
+                if (lambertian > 0.f) {
+                    Vec3f V = normalize(eye - p);
+                    Vec3f H = normalize(V + L);
+                    Vec3f R = 2.0f * N * dot(N, L) - L;
+
+
+                    //// blinn-phong
+                    specular += std::pow(std::max(dot(N, H), 0.0f), matSpecularShininess) * lightColor[i];
+                    // phong
+                    //specular += std::pow(std::max(dot(R, V), 0.0f), matSpecularShininess / 4.0f) * lightColor[i];
+                }
             }
 
             Vec3f rgb =
-                ambient * color_object +
+                ambient * matDiffuseCoeff * matDiffuseColor +
                 diffuse * matDiffuseCoeff * matDiffuseColor +
                 specular * matSpecularCoeff * matSpecularColor;
 
@@ -285,11 +295,11 @@ void key(unsigned char keyPressed, int x, int y) {
         std::cout << "matSpecularCoeff = " << matSpecularCoeff << std::endl;
         break;
     case 'r':
-        matSpecularShininess *= 2.;
+        matSpecularShininess *= 1.2;
         std::cout << "matSpecularShininess = " << matSpecularShininess << std::endl;
         break;
     case 'e':
-        matSpecularShininess /= 2.;
+        matSpecularShininess /= 1.2;
         std::cout << "matSpecularShininess = " << matSpecularShininess << std::endl;
         break;
     case 'g':
