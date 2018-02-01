@@ -12,9 +12,13 @@ endif()
 
 find_package(OpenGL)
 find_package(GLUT REQUIRED)
+find_package(GLEW REQUIRED)
 
-include_directories( ${GLUT_INCLUDE_DIR} )
+include_directories( ${GLUT_INCLUDE_DIR} ${GLEW_INCLUDE_DIR})
 message("{GLUT_INCLUDE_DIR}=${GLUT_INCLUDE_DIR}")
+message("{GLUT_LIBRARY}=${GLUT_LIBRARY}")
+message("{GLEW_INCLUDE_DIR}=${GLEW_INCLUDE_DIR}")
+message("{GLEW_LIBRARY}=${GLEW_LIBRARY}")
 file(GLOB HDRS
 	"*.h"
 )
@@ -25,4 +29,4 @@ file(GLOB SRCS
 
 add_executable(PointRender ${SRCS} ${HDRS})
 
-target_link_libraries(PointRender ${OPENGL_LIBRARIES} ${GLUT_LIBRARY} )
+target_link_libraries(PointRender ${OPENGL_LIBRARIES} ${GLUT_LIBRARY} ${GLEW_LIBRARY})

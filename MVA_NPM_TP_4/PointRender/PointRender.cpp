@@ -47,6 +47,10 @@ static bool fullScreen = false;
 // Point cloud 
 static PointCloud pointCloud;
 static float pointSize = 1.f; // screen splat size
+static std::vector<float> point_data;
+
+//VBO & VAO
+GLuint vao, vbo;
 
 // Light and material environment
 static Vec3f ambientLightColor;
@@ -63,8 +67,8 @@ static float matSpecularCoeff;
 
 static float alpha;
 
-static bool useLightOpenGL;
-
+enum class DrawingMode { Manuel, OpenGL, OpenGL_VAO_VBO, NUM_MODE };
+DrawingMode drawingMode;
 // -------------------------------------------
 // App Code.
 // -------------------------------------------
@@ -112,7 +116,7 @@ void init(const string & modelFilename) {
     matSpecularCoeff = .7f;
     matSpecularShininess = 32.0f;
 
-    useLightOpenGL = false;
+    drawingMode = DrawingMode::Manuel;
 
 
     lightPos[0] = Vec3f(2.f, -2.f, -2.f);
@@ -129,6 +133,36 @@ void init(const string & modelFilename) {
     glHint(GL_POINT_SMOOTH_HINT, GL_NICEST);
     glEnable(GL_POINT_SMOOTH);
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+
+    point_data.clear();
+    for (unsigned int i = 0; i < pointCloud.size(); i++) {
+        const PointCloud::Point & point = pointCloud(i);
+        const Vec3f & p = point.position();
+        const Vec3f & n = point.normal();
+        point_data.push_back(p[0]);
+        point_data.push_back(p[1]);
+        point_data.push_back(p[2]);
+        point_data.push_back(n[0]);
+        point_data.push_back(n[1]);
+        point_data.push_back(n[2]);
+    }
+
+    char* s = (char*)glGetString(GL_VERSION);
+    std::cout << "version = " << s << std::endl;
+
+    glGenVertexArrays(1, &vao);
+
+    glBindVertexArray(vao);
+    glGenBuffers(1, &vbo);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(float)*point_data.size(), &point_data[0], GL_STATIC_DRAW);
+    glVertexPointer(3, GL_FLOAT, 6 * sizeof(float), 0);
+    glEnableClientState(GL_VERTEX_ARRAY);
+#define BUFFER_OFFSET(offset) ((char*) NULL + offset)
+    glNormalPointer(GL_FLOAT, 6 * sizeof(float), BUFFER_OFFSET(sizeof(float) * 3));
+    glEnableClientState(GL_NORMAL_ARRAY);
+
+
 }
 
 void render() {
@@ -136,7 +170,8 @@ void render() {
     glLoadIdentity();
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     camera.apply();
-    if (useLightOpenGL) {
+
+    if (drawingMode == DrawingMode::OpenGL || drawingMode == DrawingMode::OpenGL_VAO_VBO) {
         glEnable(GL_LIGHTING);
         glDisable(GL_COLOR_MATERIAL);
         glLightModeli(GL_LIGHT_MODEL_LOCAL_VIEWER, GL_TRUE); // realistic specular light
@@ -164,15 +199,23 @@ void render() {
         glMaterialfv(GL_FRONT_AND_BACK, GL_SHININESS, &matSpecularShininess);
 
         glPointSize(pointSize);
-        glBegin(GL_POINTS);
-        for (unsigned int i = 0; i < pointCloud.size(); i++) {
-            const PointCloud::Point & point = pointCloud(i);
-            const Vec3f & p = point.position();
-            const Vec3f & n = point.normal();
-            glNormal3f(n[0], n[1], n[2]);
-            glVertex3f(p[0], p[1], p[2]);
+
+        if (drawingMode == DrawingMode::OpenGL_VAO_VBO) {
+            glBindVertexArray(vao);
+            glDrawArrays(GL_POINTS, 0, pointCloud.size());
+            glBindVertexArray(0);
+        }else {
+            glBegin(GL_POINTS);
+            for (unsigned int i = 0; i < pointCloud.size(); i++) {
+                const PointCloud::Point & point = pointCloud(i);
+                const Vec3f & p = point.position();
+                const Vec3f & n = point.normal();
+                glNormal3f(n[0], n[1], n[2]);
+                glVertex3f(p[0], p[1], p[2]);
+            }
+            glEnd();
         }
-        glEnd();
+        
         glDisable(GL_LIGHTING);
     } else {
         glPointSize(pointSize);
@@ -303,8 +346,19 @@ void key(unsigned char keyPressed, int x, int y) {
         std::cout << "matSpecularShininess = " << matSpecularShininess << std::endl;
         break;
     case 'g':
-        useLightOpenGL = !useLightOpenGL;
-        std::cout << (useLightOpenGL ? " OpenGL lighting " : " manuel lighting ") << std::endl;
+        drawingMode = DrawingMode(((int)drawingMode + 1) % (int)DrawingMode::NUM_MODE);
+        switch (drawingMode) {
+        case DrawingMode::Manuel:
+            std::cout << "Manuel lighting" << std::endl;
+            break;
+        case DrawingMode::OpenGL:
+            std::cout << "OpenGL" << std::endl;
+            break;
+        case DrawingMode::OpenGL_VAO_VBO:
+            std::cout << "OpenGL_VAO_VBO" << std::endl;
+            break;
+
+        }
         break;
     case 'q':
     case 27:
@@ -368,16 +422,27 @@ int main(int argc, char ** argv) {
         printUsage();
         exit(EXIT_FAILURE);
     }
+
+
     glutInit(&argc, argv);
     glutInitDisplayMode(GLUT_RGBA | GLUT_DEPTH | GLUT_DOUBLE);
     glutInitWindowSize(SCREENWIDTH, SCREENHEIGHT);
     window = glutCreateWindow("PointRender");
-    //try {
+
+
+    GLenum err = glewInit();
+    if (GLEW_OK != err) {
+        /* Problem: glewInit failed, something is seriously wrong. */
+        fprintf(stderr, "Error: %s\n", glewGetErrorString(err));
+    }
+    fprintf(stdout, "Status: Using GLEW %s\n", glewGetString(GLEW_VERSION));
+
+    try {
     init(argc == 2 ? string(argv[1]) : string("data/face.pn"));
-    //} catch (const Exception & e) {
-    //    cerr << "Error at initialization: " << e.message () << endl;
-    //    exit (1);
-    //};
+    } catch (const Exception & e) {
+        cerr << "Error at initialization: " << e.message () << endl;
+        exit (1);
+    };
     glutIdleFunc(idle);
     glutDisplayFunc(render);
     glutKeyboardFunc(key);
