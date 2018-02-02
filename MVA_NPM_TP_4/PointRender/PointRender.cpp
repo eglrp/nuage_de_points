@@ -78,11 +78,11 @@ R"(
 
 layout(location = 0)in vec3 vert;
 
-uniform mat4 PMV;
+uniform mat4 projection_modelview;
 
 void main()
 {
-    gl_Position = PMV * vec4(vert,1.0);
+    gl_Position = projection_modelview * vec4(vert,1.0);
 }
 )"
 };
@@ -367,11 +367,14 @@ void render() {
         GLfloat modelview[4][4];
         math::multiply_matrix(modelview, trans, rot);
 
-        GLfloat m[4][4];
-        math::translation_matrix(m, 0.1, 0, 0);
-        //std::cout << -camera.x << " " << -camera.y << " " << -camera.z - camera._zoom << std::endl;
-        GLint pmvMatrix = glGetUniformLocation(gl_program, "PMV");
-        glUniformMatrix4fv(pmvMatrix, 1, GL_TRUE, &modelview[0][0]);
+        GLfloat proj[4][4];
+        math::matrix_gl_perspectiveGL(proj, camera.fovAngle, camera.aspectRatio, camera.nearPlane, camera.farPlane);
+
+
+        GLfloat projection_modelview[4][4];
+        math::multiply_matrix(projection_modelview, proj, modelview);
+        GLint pmvMatrix = glGetUniformLocation(gl_program, "projection_modelview");
+        glUniformMatrix4fv(pmvMatrix, 1, GL_TRUE, &projection_modelview[0][0]);
         glBindVertexArray(vao);
         glDrawArrays(GL_POINTS, 0, pointCloud.size());
         glBindVertexArray(0);
