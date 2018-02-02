@@ -26,7 +26,7 @@
 #include "Vec3.h"
 #include "PointCloud.h"
 #include "Camera.h"
-
+#include "matrixmath.h"
 using namespace std;
 
 // -------------------------------------------
@@ -67,7 +67,40 @@ static float matSpecularCoeff;
 
 static float alpha;
 
-enum class DrawingMode { Manuel, OpenGL, OpenGL_VAO_VBO, NUM_MODE };
+//shader
+GLuint vertexShader, fragmentShader;
+GLuint vertexShaderObject, fragmentShaderObject;
+GLenum gl_program;
+
+const GLchar* vShaderSrc[] = {
+R"(
+#version 330
+
+layout(location = 0)in vec3 vert;
+
+uniform mat4 PMV;
+
+void main()
+{
+    gl_Position = PMV * vec4(vert,1.0);
+}
+)"
+};
+
+const GLchar* fShaderSrc[] = {
+R"(
+#version 330
+
+out vec4 fragColor;
+
+void main()
+{
+    fragColor = vec4(1.0, 0.0, 0.0, 1.0);
+}
+)"
+};
+
+enum class DrawingMode { Manuel, OpenGL, OpenGL_VAO_VBO, OpenGL_Shader, NUM_MODE };
 DrawingMode drawingMode;
 // -------------------------------------------
 // App Code.
@@ -94,7 +127,7 @@ void printUsage() {
         << " d/a : Increase/Decrease matDiffuseCoeff " << endl
         << " x/z : Increase/Decrease matSpecularCoeff " << endl
         << " r/e : Increase/Decrease matSpecularShininess " << endl
-        << " g : Switch between manuel lighting and OpenGL lighting" << endl
+        << " g : Switch between modes : Manuel, OpenGL, OpenGL_VAO_VBO and OpenGL_Shader" << endl
         << endl;
 }
 
@@ -150,8 +183,8 @@ void init(const string & modelFilename) {
     char* s = (char*)glGetString(GL_VERSION);
     std::cout << "version = " << s << std::endl;
 
+    //VAO, VBO
     glGenVertexArrays(1, &vao);
-
     glBindVertexArray(vao);
     glGenBuffers(1, &vbo);
     glBindBuffer(GL_ARRAY_BUFFER, vbo);
@@ -163,6 +196,54 @@ void init(const string & modelFilename) {
     glEnableClientState(GL_NORMAL_ARRAY);
 
 
+    //shader
+    GLint compiled, linked;
+    vertexShaderObject = glCreateShader(GL_VERTEX_SHADER);
+    fragmentShaderObject = glCreateShader(GL_FRAGMENT_SHADER);
+
+    //vertex shader
+    glShaderSource(vertexShaderObject, 1, vShaderSrc, NULL);
+    glCompileShader(vertexShaderObject);
+    glGetShaderiv(vertexShaderObject, GL_COMPILE_STATUS, &compiled);
+    if (!compiled) {
+        GLint length;
+        GLchar* log;
+        glGetShaderiv(vertexShaderObject, GL_INFO_LOG_LENGTH,
+            &length);
+        log = (GLchar*)malloc(length);
+        glGetShaderInfoLog(vertexShaderObject, length, &length, log);
+        fprintf(stderr, "compile log = '%s'\n", log);
+        free(log);
+    }
+    //frag shader
+    glShaderSource(fragmentShaderObject, 1, fShaderSrc, NULL);
+    glCompileShader(fragmentShaderObject);
+    glGetShaderiv(fragmentShaderObject, GL_COMPILE_STATUS, &compiled);
+    if (!compiled) {
+        GLint length;
+        GLchar* log;
+        glGetShaderiv(fragmentShaderObject, GL_INFO_LOG_LENGTH,
+            &length);
+        log = (GLchar*)malloc(length);
+        glGetShaderInfoLog(fragmentShaderObject, length, &length, log);
+        fprintf(stderr, "compile log = '%s'\n", log);
+        free(log);
+    }
+    // gl program
+    gl_program = glCreateProgram();
+    glAttachShader(gl_program, vertexShaderObject);
+    glAttachShader(gl_program, fragmentShaderObject);
+    glLinkProgram(gl_program);
+    glGetProgramiv(gl_program, GL_LINK_STATUS, &linked);
+    if (!linked) {
+        GLint length;
+        GLchar* log;
+        glGetProgramiv(gl_program, GL_INFO_LOG_LENGTH, &length);
+        log = (GLchar*)malloc(length);
+        glGetProgramInfoLog(gl_program, length, &length, log);
+        fprintf(stderr, "link log = '%s'\n", log);
+        free(log);
+    }
 }
 
 void render() {
@@ -170,55 +251,14 @@ void render() {
     glLoadIdentity();
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     camera.apply();
-
-    if (drawingMode == DrawingMode::OpenGL || drawingMode == DrawingMode::OpenGL_VAO_VBO) {
-        glEnable(GL_LIGHTING);
-        glDisable(GL_COLOR_MATERIAL);
-        glLightModeli(GL_LIGHT_MODEL_LOCAL_VIEWER, GL_TRUE); // realistic specular light
-
-        Vec3f lightAmbient = ambientLightColor*ambientLightCoeff;
-        GLfloat ambient[] = { lightAmbient[0], lightAmbient[1], lightAmbient[2], 1.0 };
-        glLightModelfv(GL_LIGHT_MODEL_AMBIENT, ambient);
-
-        GLenum lights[] = { GL_LIGHT0, GL_LIGHT1, GL_LIGHT2 };
-        for (int i = 0; i < 3; i++) {
-            GLfloat color[] = { lightColor[i][0], lightColor[i][1],lightColor[i][2], 1.0 };
-            glLightfv(lights[i], GL_DIFFUSE, color);
-            glLightfv(lights[i], GL_SPECULAR, color);
-            GLfloat pos[] = { lightPos[i][0], lightPos[i][1],lightPos[i][2], 1.0 };
-            glLightfv(lights[i], GL_POSITION, pos);
-            glEnable(lights[i]);
-        }
-
-        Vec3f matDiffuse = matDiffuseColor*matDiffuseCoeff;
-        GLfloat matDiffuseRGBA[] = { matDiffuse[0], matDiffuse[1], matDiffuse[2], 1.0 };
-        glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE, matDiffuseRGBA);
-        Vec3f matSpecular = matSpecularColor*matSpecularCoeff;
-        GLfloat matSpecularRGBA[] = { matSpecular[0], matSpecular[1], matSpecular[2], 1.0 };
-        glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, matSpecularRGBA);
-        glMaterialfv(GL_FRONT_AND_BACK, GL_SHININESS, &matSpecularShininess);
-
-        glPointSize(pointSize);
-
-        if (drawingMode == DrawingMode::OpenGL_VAO_VBO) {
-            glBindVertexArray(vao);
-            glDrawArrays(GL_POINTS, 0, pointCloud.size());
-            glBindVertexArray(0);
-        }else {
-            glBegin(GL_POINTS);
-            for (unsigned int i = 0; i < pointCloud.size(); i++) {
-                const PointCloud::Point & point = pointCloud(i);
-                const Vec3f & p = point.position();
-                const Vec3f & n = point.normal();
-                glNormal3f(n[0], n[1], n[2]);
-                glVertex3f(p[0], p[1], p[2]);
-            }
-            glEnd();
-        }
-        
-        glDisable(GL_LIGHTING);
-    } else {
-        glPointSize(pointSize);
+    if (drawingMode == DrawingMode::OpenGL_Shader) {
+        glUseProgram(gl_program);
+    }
+    else {
+        glUseProgram(0);
+    }
+    switch (drawingMode) {
+    case DrawingMode::Manuel: {glPointSize(pointSize);
         glBegin(GL_POINTS);
         Vec3f eye;
         camera.getPos(eye[0], eye[1], eye[2]);
@@ -267,6 +307,77 @@ void render() {
             glVertex3f(p[0], p[1], p[2]);
         }
         glEnd();
+        break;
+    }
+    case DrawingMode::OpenGL:
+    case DrawingMode::OpenGL_VAO_VBO: {
+        glEnable(GL_LIGHTING);
+        glDisable(GL_COLOR_MATERIAL);
+        glLightModeli(GL_LIGHT_MODEL_LOCAL_VIEWER, GL_TRUE); // realistic specular light
+
+        Vec3f lightAmbient = ambientLightColor*ambientLightCoeff;
+        GLfloat ambient[] = { lightAmbient[0], lightAmbient[1], lightAmbient[2], 1.0 };
+        glLightModelfv(GL_LIGHT_MODEL_AMBIENT, ambient);
+
+        GLenum lights[] = { GL_LIGHT0, GL_LIGHT1, GL_LIGHT2 };
+        for (int i = 0; i < 3; i++) {
+            GLfloat color[] = { lightColor[i][0], lightColor[i][1],lightColor[i][2], 1.0 };
+            glLightfv(lights[i], GL_DIFFUSE, color);
+            glLightfv(lights[i], GL_SPECULAR, color);
+            GLfloat pos[] = { lightPos[i][0], lightPos[i][1],lightPos[i][2], 1.0 };
+            glLightfv(lights[i], GL_POSITION, pos);
+            glEnable(lights[i]);
+        }
+
+        Vec3f matDiffuse = matDiffuseColor*matDiffuseCoeff;
+        GLfloat matDiffuseRGBA[] = { matDiffuse[0], matDiffuse[1], matDiffuse[2], 1.0 };
+        glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE, matDiffuseRGBA);
+        Vec3f matSpecular = matSpecularColor*matSpecularCoeff;
+        GLfloat matSpecularRGBA[] = { matSpecular[0], matSpecular[1], matSpecular[2], 1.0 };
+        glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, matSpecularRGBA);
+        glMaterialfv(GL_FRONT_AND_BACK, GL_SHININESS, &matSpecularShininess);
+
+        glPointSize(pointSize);
+
+        if (drawingMode == DrawingMode::OpenGL_VAO_VBO || drawingMode == DrawingMode::OpenGL_Shader) {
+            glBindVertexArray(vao);
+            glDrawArrays(GL_POINTS, 0, pointCloud.size());
+            glBindVertexArray(0);
+        }
+        else {
+            glBegin(GL_POINTS);
+            for (unsigned int i = 0; i < pointCloud.size(); i++) {
+                const PointCloud::Point & point = pointCloud(i);
+                const Vec3f & p = point.position();
+                const Vec3f & n = point.normal();
+                glNormal3f(n[0], n[1], n[2]);
+                glVertex3f(p[0], p[1], p[2]);
+            }
+            glEnd();
+        }
+        glDisable(GL_LIGHTING);
+        break;
+    }
+    case DrawingMode::OpenGL_Shader: {
+        GLfloat trans[4][4];
+        math::translation_matrix(trans, -camera.x, -camera.y, -camera.z - camera._zoom);
+        GLfloat rot[4][4];
+        build_rotmatrix(rot, camera.curquat);
+        math::transpose_in_place(rot);
+        GLfloat modelview[4][4];
+        math::multiply_matrix(modelview, trans, rot);
+
+        GLfloat m[4][4];
+        math::translation_matrix(m, 0.1, 0, 0);
+        //std::cout << -camera.x << " " << -camera.y << " " << -camera.z - camera._zoom << std::endl;
+        GLint pmvMatrix = glGetUniformLocation(gl_program, "PMV");
+        glUniformMatrix4fv(pmvMatrix, 1, GL_TRUE, &modelview[0][0]);
+        glBindVertexArray(vao);
+        glDrawArrays(GL_POINTS, 0, pointCloud.size());
+        glBindVertexArray(0);
+
+        break;
+    }
     }
     glutSwapBuffers();
 }
@@ -293,7 +404,8 @@ void key(unsigned char keyPressed, int x, int y) {
         if (fullScreen) {
             glutReshapeWindow(SCREENWIDTH, SCREENHEIGHT);
             fullScreen = false;
-        } else {
+        }
+        else {
             glutFullScreen();
             fullScreen = true;
         }
@@ -357,7 +469,9 @@ void key(unsigned char keyPressed, int x, int y) {
         case DrawingMode::OpenGL_VAO_VBO:
             std::cout << "OpenGL_VAO_VBO" << std::endl;
             break;
-
+        case DrawingMode::OpenGL_Shader:
+            std::cout << "OpenGL_Shader" << std::endl;
+            break;
         }
         break;
     case 'q':
@@ -376,19 +490,22 @@ void mouse(int button, int state, int x, int y) {
         mouseMovePressed = false;
         mouseRotatePressed = false;
         mouseZoomPressed = false;
-    } else {
+    }
+    else {
         if (button == GLUT_LEFT_BUTTON) {
             camera.beginRotate(x, y);
             mouseMovePressed = false;
             mouseRotatePressed = true;
             mouseZoomPressed = false;
-        } else if (button == GLUT_RIGHT_BUTTON) {
+        }
+        else if (button == GLUT_RIGHT_BUTTON) {
             lastX = x;
             lastY = y;
             mouseMovePressed = true;
             mouseRotatePressed = false;
             mouseZoomPressed = false;
-        } else if (button == GLUT_MIDDLE_BUTTON) {
+        }
+        else if (button == GLUT_MIDDLE_BUTTON) {
             if (mouseZoomPressed == false) {
                 lastZoom = y;
                 mouseMovePressed = false;
@@ -403,11 +520,13 @@ void mouse(int button, int state, int x, int y) {
 void motion(int x, int y) {
     if (mouseRotatePressed == true) {
         camera.rotate(x, y);
-    } else if (mouseMovePressed == true) {
+    }
+    else if (mouseMovePressed == true) {
         camera.move((x - lastX) / static_cast<float>(SCREENWIDTH), (lastY - y) / static_cast<float>(SCREENHEIGHT), 0.0);
         lastX = x;
         lastY = y;
-    } else if (mouseZoomPressed == true) {
+    }
+    else if (mouseZoomPressed == true) {
         camera.zoom(float(y - lastZoom) / SCREENHEIGHT);
         lastZoom = y;
     }
@@ -433,15 +552,16 @@ int main(int argc, char ** argv) {
     GLenum err = glewInit();
     if (GLEW_OK != err) {
         /* Problem: glewInit failed, something is seriously wrong. */
-        fprintf(stderr, "Error: %s\n", glewGetErrorString(err));
+        std::cerr << "Error: " << glewGetErrorString(err) << std::endl;
     }
-    fprintf(stdout, "Status: Using GLEW %s\n", glewGetString(GLEW_VERSION));
+    std::cout << "Status: Using GLEW " << glewGetString(GLEW_VERSION) << std::endl;
 
     try {
-    init(argc == 2 ? string(argv[1]) : string("data/face.pn"));
-    } catch (const Exception & e) {
-        cerr << "Error at initialization: " << e.message () << endl;
-        exit (1);
+        init(argc == 2 ? string(argv[1]) : string("data/face.pn"));
+    }
+    catch (const Exception & e) {
+        cerr << "Error at initialization: " << e.message() << endl;
+        exit(1);
     };
     glutIdleFunc(idle);
     glutDisplayFunc(render);

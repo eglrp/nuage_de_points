@@ -39,7 +39,7 @@ public:
   
   void getPos (float & x, float & y, float & z);
   
-private:
+//private:
   float fovAngle;
   float aspectRatio;
   float nearPlane;
