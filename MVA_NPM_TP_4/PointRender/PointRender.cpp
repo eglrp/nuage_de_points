@@ -49,22 +49,25 @@ static PointCloud pointCloud;
 static float pointSize = 1.f; // screen splat size
 static std::vector<float> point_data;
 
-//VBO & VAO
-GLuint vao, vbo;
+//VBO, VAO, UBO
+GLuint vao, vbo, ubo;
 
 // Light and material environment
-static Vec3f ambientLightColor;
-static float ambientLightCoeff;
-static Vec3f lightPos[3];
-static Vec3f lightColor[3];
+struct Lighting {
+    Vec3f ambientLightColor;
+    float ambientLightCoeff;
+    Vec3f lightPos[3];
+    Vec3f lightColor[3];
 
-static Vec3f matDiffuseColor;
-static float matDiffuseCoeff;
+    Vec3f matDiffuseColor;
+    float matDiffuseCoeff;
 
-static Vec3f matSpecularColor;
-static float matSpecularShininess;
-static float matSpecularCoeff;
+    Vec3f matSpecularColor;
+    float matSpecularShininess;
+    float matSpecularCoeff;
+};
 
+static Lighting lighting;
 static float alpha;
 
 //shader
@@ -76,13 +79,19 @@ const GLchar* vShaderSrc[] = {
 R"(
 #version 330
 
-layout(location = 0)in vec3 vert;
+layout(location = 0) in vec3 pos;
+layout(location = 1) in vec3 normal_in;
 
 uniform mat4 projection_modelview;
 
+out vec3 normal;
+out vec3 p;
+
 void main()
 {
-    gl_Position = projection_modelview * vec4(vert,1.0);
+    gl_Position = projection_modelview * vec4(pos,1.0);
+    normal = normal_in;
+    p = pos;
 }
 )"
 };
@@ -90,12 +99,57 @@ void main()
 const GLchar* fShaderSrc[] = {
 R"(
 #version 330
-
+in vec3 normal;
+in vec3 p;
 out vec4 fragColor;
+
+layout(std140) uniform LightingBlock {
+    vec3 ambientLightColor;
+    float ambientLightCoeff;
+    vec3 lightPos[3];
+    vec3 lightColor[3];
+
+    vec3 matDiffuseColor;
+    float matDiffuseCoeff;
+
+    vec3 matSpecularColor;
+    float matSpecularShininess;
+    float matSpecularCoeff;
+} lighting;
+
+uniform vec3 eye;
 
 void main()
 {
-    fragColor = vec4(1.0, 0.0, 0.0, 1.0);
+    vec3 ambient = lighting.ambientLightColor*lighting.ambientLightCoeff;
+
+    vec3 diffuse = vec3(0., 0., 0.);
+    vec3 specular = vec3(0., 0., 0.);
+    vec3 N = normalize(normal);
+    for (int i = 0; i < 3; i++) {
+        vec3 L = normalize(lighting.lightPos[i] - p);
+        float lambertian = max(dot(L, N), 0.0);
+        diffuse += lambertian * lighting.lightColor[i];
+
+        if (lambertian > 0.) {
+            vec3 V = normalize(eye - p);
+            vec3 H = normalize(V + L);
+            vec3 R = 2.0 * N * dot(N, L) - L;
+
+
+            //// blinn-phong
+            specular += pow(max(dot(N, H), 0.0), lighting.matSpecularShininess) * lighting.lightColor[i];
+            // phong
+            //specular += pow(max(dot(R, V), 0.0), matSpecularShininess / 4.0) * lightColor[i];
+        }
+    }
+
+    vec3 rgb =
+        ambient * lighting.matDiffuseCoeff * lighting.matDiffuseColor +
+        diffuse * lighting.matDiffuseCoeff * lighting.matDiffuseColor +
+        specular * lighting.matSpecularCoeff * lighting.matSpecularColor;
+
+    fragColor = vec4(rgb, 1.0);
 }
 )"
 };
@@ -136,67 +190,7 @@ void usage() {
     exit(EXIT_FAILURE);
 }
 
-void init(const string & modelFilename) {
-    camera.resize(SCREENWIDTH, SCREENHEIGHT);
-    pointCloud.loadPN(modelFilename);
-    ambientLightColor = Vec3f(0.6f, 0.6f, 0.6f);
-    ambientLightCoeff = 0.3f;
-
-    matDiffuseColor = Vec3f(.8f, .8f, .8f);
-    matDiffuseCoeff = .5f;
-
-    matSpecularColor = Vec3f(.8f, .8f, .8f);
-    matSpecularCoeff = .7f;
-    matSpecularShininess = 32.0f;
-
-    drawingMode = DrawingMode::Manuel;
-
-
-    lightPos[0] = Vec3f(2.f, -2.f, -2.f);
-    lightColor[0] = Vec3f(0.8f, 0.0f, 0.f);
-    lightPos[1] = Vec3f(-2.f, -2.f, 0.f);
-    lightColor[1] = Vec3f(0.f, 0.7f, 0.f);
-    lightPos[2] = Vec3f(-2.f, 2.f, 2.f);
-    lightColor[2] = Vec3f(0.f, 0.5f, 1.f);
-    alpha = 0.3;
-    glCullFace(GL_BACK);
-    glEnable(GL_CULL_FACE);
-    glDepthFunc(GL_LESS);
-    glEnable(GL_DEPTH_TEST);
-    glHint(GL_POINT_SMOOTH_HINT, GL_NICEST);
-    glEnable(GL_POINT_SMOOTH);
-    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-
-    point_data.clear();
-    for (unsigned int i = 0; i < pointCloud.size(); i++) {
-        const PointCloud::Point & point = pointCloud(i);
-        const Vec3f & p = point.position();
-        const Vec3f & n = point.normal();
-        point_data.push_back(p[0]);
-        point_data.push_back(p[1]);
-        point_data.push_back(p[2]);
-        point_data.push_back(n[0]);
-        point_data.push_back(n[1]);
-        point_data.push_back(n[2]);
-    }
-
-    char* s = (char*)glGetString(GL_VERSION);
-    std::cout << "version = " << s << std::endl;
-
-    //VAO, VBO
-    glGenVertexArrays(1, &vao);
-    glBindVertexArray(vao);
-    glGenBuffers(1, &vbo);
-    glBindBuffer(GL_ARRAY_BUFFER, vbo);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(float)*point_data.size(), &point_data[0], GL_STATIC_DRAW);
-    glVertexPointer(3, GL_FLOAT, 6 * sizeof(float), 0);
-    glEnableClientState(GL_VERTEX_ARRAY);
-#define BUFFER_OFFSET(offset) ((char*) NULL + offset)
-    glNormalPointer(GL_FLOAT, 6 * sizeof(float), BUFFER_OFFSET(sizeof(float) * 3));
-    glEnableClientState(GL_NORMAL_ARRAY);
-
-
-    //shader
+void compile_shader() {
     GLint compiled, linked;
     vertexShaderObject = glCreateShader(GL_VERTEX_SHADER);
     fragmentShaderObject = glCreateShader(GL_FRAGMENT_SHADER);
@@ -246,22 +240,161 @@ void init(const string & modelFilename) {
     }
 }
 
+void update_uniforms() {
+    static const GLchar* uniformNames[9] = {
+        "LightingBlock.ambientLightColor",       //0
+        "LightingBlock.ambientLightCoeff",       //1
+        "LightingBlock.lightPos",                //2
+        "LightingBlock.lightColor",              //3
+        "LightingBlock.matDiffuseColor",         //4
+        "LightingBlock.matDiffuseCoeff",         //5
+        "LightingBlock.matSpecularColor",        //6
+        "LightingBlock.matSpecularShininess",    //7
+        "LightingBlock.matSpecularCoeff",        //8
+    };
+
+    GLuint uniformIndices[9];
+
+    glGetUniformIndices(gl_program, 9, uniformNames, uniformIndices);
+
+    GLint uniformOffsets[9];
+    GLint arrayStrides[9];
+
+    glGetActiveUniformsiv(gl_program, 9, uniformIndices, GL_UNIFORM_OFFSET, uniformOffsets);
+    glGetActiveUniformsiv(gl_program, 9, uniformIndices, GL_UNIFORM_ARRAY_STRIDE, arrayStrides);
+    const int size = 4096;
+    unsigned char* buffer = (unsigned char *)malloc(size);
+    *(Vec3f *)(buffer + uniformOffsets[0]) = lighting.ambientLightColor;
+    *(float*)(buffer + uniformOffsets[1]) = lighting.ambientLightCoeff;
+
+    for (int i = 0; i < 3; i++) {
+        *(Vec3f*)(buffer + uniformOffsets[2] + arrayStrides[2] * i) = lighting.lightPos[i];
+        *(Vec3f*)(buffer + uniformOffsets[3] + arrayStrides[3] * i) = lighting.lightColor[i];
+    }
+
+
+    *(Vec3f *)(buffer + uniformOffsets[4]) = lighting.matDiffuseColor;
+    *(float*)(buffer + uniformOffsets[5]) = lighting.matDiffuseCoeff;
+    *(Vec3f *)(buffer + uniformOffsets[6]) = lighting.matSpecularColor;
+    *(float*)(buffer + uniformOffsets[7]) = lighting.matSpecularShininess;
+    *(float*)(buffer + uniformOffsets[8]) = lighting.matSpecularCoeff;
+
+    glGenBuffers(1, &ubo);
+    glBindBuffer(GL_UNIFORM_BUFFER, ubo);
+    glBufferData(GL_UNIFORM_BUFFER, size, buffer, GL_DYNAMIC_DRAW);
+
+    GLuint blockIndex = glGetUniformBlockIndex(gl_program, "LightingBlock");
+    GLuint uniformBlockBinding = 0;
+    glUniformBlockBinding(gl_program, blockIndex, uniformBlockBinding);
+    glBindBufferBase(GL_UNIFORM_BUFFER, uniformBlockBinding, ubo);
+
+    free(buffer);
+
+}
+
+void init(const string & modelFilename) {
+    camera.resize(SCREENWIDTH, SCREENHEIGHT);
+    pointCloud.loadPN(modelFilename);
+    lighting.ambientLightColor = Vec3f(0.6f, 0.6f, 0.6f);
+    lighting.ambientLightCoeff = 0.3f;
+
+    lighting.matDiffuseColor = Vec3f(.8f, .8f, .8f);
+    lighting.matDiffuseCoeff = .5f;
+
+    lighting.matSpecularColor = Vec3f(.8f, .8f, .8f);
+    lighting.matSpecularCoeff = .7f;
+    lighting.matSpecularShininess = 32.0f;
+
+    drawingMode = DrawingMode::Manuel;
+
+
+    lighting.lightPos[0] = Vec3f(2.f, -2.f, -2.f);
+    lighting.lightColor[0] = Vec3f(0.8f, 0.0f, 0.f);
+    lighting.lightPos[1] = Vec3f(-2.f, -2.f, 0.f);
+    lighting.lightColor[1] = Vec3f(0.f, 0.7f, 0.f);
+    lighting.lightPos[2] = Vec3f(-2.f, 2.f, 2.f);
+    lighting.lightColor[2] = Vec3f(0.f, 0.5f, 1.f);
+    alpha = 0.3;
+    glCullFace(GL_BACK);
+    glEnable(GL_CULL_FACE);
+    glDepthFunc(GL_LESS);
+    glEnable(GL_DEPTH_TEST);
+    glHint(GL_POINT_SMOOTH_HINT, GL_NICEST);
+    glEnable(GL_POINT_SMOOTH);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+
+    point_data.clear();
+    for (unsigned int i = 0; i < pointCloud.size(); i++) {
+        const PointCloud::Point & point = pointCloud(i);
+        const Vec3f & p = point.position();
+        const Vec3f & n = point.normal();
+        point_data.push_back(p[0]);
+        point_data.push_back(p[1]);
+        point_data.push_back(p[2]);
+        point_data.push_back(n[0]);
+        point_data.push_back(n[1]);
+        point_data.push_back(n[2]);
+    }
+
+    
+
+    //VAO, VBO
+    glCreateBuffers(1, &vbo);
+    glNamedBufferStorage(vbo, sizeof(float)*point_data.size(), &point_data[0], 0);
+    //glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    //glBufferData(GL_ARRAY_BUFFER, sizeof(float)*point_data.size(), &point_data[0], GL_STATIC_DRAW);
+
+
+    glCreateVertexArrays(1, &vao);
+
+    GLuint bindingindex = 0;
+    GLintptr offset = 0;
+    GLsizei stride = 6 * sizeof(float);
+    glVertexArrayVertexBuffer(vao, bindingindex, vbo, offset, stride);
+
+    {//bind vertex position data
+        GLuint attrib = 0;
+        GLuint relativeoffset = 0;
+        GLuint components = 3;
+        glVertexArrayAttribBinding(vao, attrib, bindingindex);
+        glVertexArrayAttribFormat(vao, attrib, components, GL_FLOAT, GL_FALSE, relativeoffset);
+        glEnableVertexArrayAttrib(vao, attrib);
+    }
+    {//bind vertex normal data
+        GLuint attrib = 1;
+        GLuint relativeoffset = 3 * sizeof(float);
+        GLuint components = 3;
+        glVertexArrayAttribBinding(vao, attrib, bindingindex);
+        glVertexArrayAttribFormat(vao, attrib, components, GL_FLOAT, GL_FALSE, relativeoffset);
+        glEnableVertexArrayAttrib(vao, attrib);
+    }
+
+    //glVertexPointer(3, GL_FLOAT, 6 * sizeof(float), 0);
+    //glEnableClientState(GL_VERTEX_ARRAY);
+#define BUFFER_OFFSET(offset) ((void*) (offset))
+    //glNormalPointer(GL_FLOAT, 6 * sizeof(float), BUFFER_OFFSET(sizeof(float) * 3));
+    //glEnableClientState(GL_NORMAL_ARRAY);
+
+
+    //shader
+    compile_shader();
+    
+    //uniform
+    update_uniforms();
+}
+
 void render() {
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     camera.apply();
-    if (drawingMode == DrawingMode::OpenGL_Shader) {
-        glUseProgram(gl_program);
-    }
-    else {
-        glUseProgram(0);
-    }
+    Vec3f eye;
+    camera.getPos(eye[0], eye[1], eye[2]);
+
     switch (drawingMode) {
     case DrawingMode::Manuel: {glPointSize(pointSize);
         glBegin(GL_POINTS);
-        Vec3f eye;
-        camera.getPos(eye[0], eye[1], eye[2]);
+        
         for (unsigned int i = 0; i < pointCloud.size(); i++) {
             const PointCloud::Point & point = pointCloud(i);
             const Vec3f & p = point.position();
@@ -273,15 +406,15 @@ void render() {
             //y = (y + 1.f) / 2.f;
             //Vec3f color_object = Vec3f(y, 0.f, 1.f - y);
 
-            Vec3f ambient = ambientLightColor*ambientLightCoeff;
+            Vec3f ambient = lighting.ambientLightColor*lighting.ambientLightCoeff;
 
             Vec3f diffuse(0.f, 0.f, 0.f);
             Vec3f specular(0.f, 0.f, 0.f);
             Vec3f N = normalize(n);
             for (int i = 0; i < 3; i++) {
-                Vec3f L = normalize(lightPos[i] - p);
+                Vec3f L = normalize(lighting.lightPos[i] - p);
                 float lambertian = std::max(dot(L, N), 0.0f);
-                diffuse += lambertian * lightColor[i];
+                diffuse += lambertian * lighting.lightColor[i];
 
                 if (lambertian > 0.f) {
                     Vec3f V = normalize(eye - p);
@@ -290,16 +423,16 @@ void render() {
 
 
                     //// blinn-phong
-                    specular += std::pow(std::max(dot(N, H), 0.0f), matSpecularShininess) * lightColor[i];
+                    specular += std::pow(std::max(dot(N, H), 0.0f), lighting.matSpecularShininess) * lighting.lightColor[i];
                     // phong
                     //specular += std::pow(std::max(dot(R, V), 0.0f), matSpecularShininess / 4.0f) * lightColor[i];
                 }
             }
 
             Vec3f rgb =
-                ambient * matDiffuseCoeff * matDiffuseColor +
-                diffuse * matDiffuseCoeff * matDiffuseColor +
-                specular * matSpecularCoeff * matSpecularColor;
+                ambient * lighting.matDiffuseCoeff * lighting.matDiffuseColor +
+                diffuse * lighting.matDiffuseCoeff * lighting.matDiffuseColor +
+                specular * lighting.matSpecularCoeff * lighting.matSpecularColor;
 
 
             // ----------------------------
@@ -315,27 +448,27 @@ void render() {
         glDisable(GL_COLOR_MATERIAL);
         glLightModeli(GL_LIGHT_MODEL_LOCAL_VIEWER, GL_TRUE); // realistic specular light
 
-        Vec3f lightAmbient = ambientLightColor*ambientLightCoeff;
+        Vec3f lightAmbient = lighting.ambientLightColor*lighting.ambientLightCoeff;
         GLfloat ambient[] = { lightAmbient[0], lightAmbient[1], lightAmbient[2], 1.0 };
         glLightModelfv(GL_LIGHT_MODEL_AMBIENT, ambient);
 
         GLenum lights[] = { GL_LIGHT0, GL_LIGHT1, GL_LIGHT2 };
         for (int i = 0; i < 3; i++) {
-            GLfloat color[] = { lightColor[i][0], lightColor[i][1],lightColor[i][2], 1.0 };
+            GLfloat color[] = { lighting.lightColor[i][0], lighting.lightColor[i][1], lighting.lightColor[i][2], 1.0 };
             glLightfv(lights[i], GL_DIFFUSE, color);
             glLightfv(lights[i], GL_SPECULAR, color);
-            GLfloat pos[] = { lightPos[i][0], lightPos[i][1],lightPos[i][2], 1.0 };
+            GLfloat pos[] = { lighting.lightPos[i][0], lighting.lightPos[i][1], lighting.lightPos[i][2], 1.0 };
             glLightfv(lights[i], GL_POSITION, pos);
             glEnable(lights[i]);
         }
 
-        Vec3f matDiffuse = matDiffuseColor*matDiffuseCoeff;
+        Vec3f matDiffuse = lighting.matDiffuseColor*lighting.matDiffuseCoeff;
         GLfloat matDiffuseRGBA[] = { matDiffuse[0], matDiffuse[1], matDiffuse[2], 1.0 };
         glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE, matDiffuseRGBA);
-        Vec3f matSpecular = matSpecularColor*matSpecularCoeff;
+        Vec3f matSpecular = lighting.matSpecularColor*lighting.matSpecularCoeff;
         GLfloat matSpecularRGBA[] = { matSpecular[0], matSpecular[1], matSpecular[2], 1.0 };
         glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, matSpecularRGBA);
-        glMaterialfv(GL_FRONT_AND_BACK, GL_SHININESS, &matSpecularShininess);
+        glMaterialfv(GL_FRONT_AND_BACK, GL_SHININESS, &lighting.matSpecularShininess);
 
         glPointSize(pointSize);
 
@@ -359,22 +492,32 @@ void render() {
         break;
     }
     case DrawingMode::OpenGL_Shader: {
-        GLfloat trans[4][4];
-        math::translation_matrix(trans, -camera.x, -camera.y, -camera.z - camera._zoom);
-        GLfloat rot[4][4];
-        build_rotmatrix(rot, camera.curquat);
-        math::transpose_in_place(rot);
-        GLfloat modelview[4][4];
-        math::multiply_matrix(modelview, trans, rot);
+        {//projection model view matrix
+            GLfloat trans[4][4];
+            math::translation_matrix(trans, -camera.x, -camera.y, -camera.z - camera._zoom);
+            GLfloat rot[4][4];
+            build_rotmatrix(rot, camera.curquat);
+            math::transpose_in_place(rot);
+            GLfloat modelview[4][4];
+            math::multiply_matrix(modelview, trans, rot);
 
-        GLfloat proj[4][4];
-        math::matrix_gl_perspectiveGL(proj, camera.fovAngle, camera.aspectRatio, camera.nearPlane, camera.farPlane);
+            GLfloat proj[4][4];
+            math::matrix_gl_perspectiveGL(proj, camera.fovAngle, camera.aspectRatio, camera.nearPlane, camera.farPlane);
 
 
-        GLfloat projection_modelview[4][4];
-        math::multiply_matrix(projection_modelview, proj, modelview);
-        GLint pmvMatrix = glGetUniformLocation(gl_program, "projection_modelview");
-        glUniformMatrix4fv(pmvMatrix, 1, GL_TRUE, &projection_modelview[0][0]);
+            GLfloat projection_modelview[4][4];
+            math::multiply_matrix(projection_modelview, proj, modelview);
+            GLint pmvMatrix = glGetUniformLocation(gl_program, "projection_modelview");
+            glUniformMatrix4fv(pmvMatrix, 1, GL_TRUE, &projection_modelview[0][0]);
+        }
+
+
+        GLint eye_loc = glGetUniformLocation(gl_program, "eye");
+        glUniform3fv(eye_loc, 1, &eye[0]);
+
+
+
+        //draw
         glBindVertexArray(vao);
         glDrawArrays(GL_POINTS, 0, pointCloud.size());
         glBindVertexArray(0);
@@ -429,36 +572,36 @@ void key(unsigned char keyPressed, int x, int y) {
             alpha -= 0.1f;
         break;
     case 'w':
-        ambientLightCoeff += 0.1;
-        std::cout << "ambientLightCoeff = " << ambientLightCoeff << std::endl;
+        lighting.ambientLightCoeff += 0.1;
+        std::cout << "ambientLightCoeff = " << lighting.ambientLightCoeff << std::endl;
         break;
     case 's':
-        ambientLightCoeff -= 0.1;
-        std::cout << "ambientLightCoeff = " << ambientLightCoeff << std::endl;
+        lighting.ambientLightCoeff -= 0.1;
+        std::cout << "ambientLightCoeff = " << lighting.ambientLightCoeff << std::endl;
         break;
     case 'd':
-        matDiffuseCoeff += 0.1;
-        std::cout << "matDiffuseCoeff = " << matDiffuseCoeff << std::endl;
+        lighting.matDiffuseCoeff += 0.1;
+        std::cout << "matDiffuseCoeff = " << lighting.matDiffuseCoeff << std::endl;
         break;
     case 'a':
-        matDiffuseCoeff -= 0.1;
-        std::cout << "matDiffuseCoeff = " << matDiffuseCoeff << std::endl;
+        lighting.matDiffuseCoeff -= 0.1;
+        std::cout << "matDiffuseCoeff = " << lighting.matDiffuseCoeff << std::endl;
         break;
     case 'x':
-        matSpecularCoeff += 0.1;
-        std::cout << "matSpecularCoeff = " << matSpecularCoeff << std::endl;
+        lighting.matSpecularCoeff += 0.1;
+        std::cout << "matSpecularCoeff = " << lighting.matSpecularCoeff << std::endl;
         break;
     case 'z':
-        matSpecularCoeff -= 0.1;
-        std::cout << "matSpecularCoeff = " << matSpecularCoeff << std::endl;
+        lighting.matSpecularCoeff -= 0.1;
+        std::cout << "matSpecularCoeff = " << lighting.matSpecularCoeff << std::endl;
         break;
     case 'r':
-        matSpecularShininess *= 1.2;
-        std::cout << "matSpecularShininess = " << matSpecularShininess << std::endl;
+        lighting.matSpecularShininess *= 1.2;
+        std::cout << "matSpecularShininess = " << lighting.matSpecularShininess << std::endl;
         break;
     case 'e':
-        matSpecularShininess /= 1.2;
-        std::cout << "matSpecularShininess = " << matSpecularShininess << std::endl;
+        lighting.matSpecularShininess /= 1.2;
+        std::cout << "matSpecularShininess = " << lighting.matSpecularShininess << std::endl;
         break;
     case 'g':
         drawingMode = DrawingMode(((int)drawingMode + 1) % (int)DrawingMode::NUM_MODE);
@@ -475,6 +618,12 @@ void key(unsigned char keyPressed, int x, int y) {
         case DrawingMode::OpenGL_Shader:
             std::cout << "OpenGL_Shader" << std::endl;
             break;
+        }
+        if (drawingMode == DrawingMode::OpenGL_Shader) {
+            glUseProgram(gl_program);
+        }
+        else {
+            glUseProgram(0);
         }
         break;
     case 'q':
@@ -558,6 +707,9 @@ int main(int argc, char ** argv) {
         std::cerr << "Error: " << glewGetErrorString(err) << std::endl;
     }
     std::cout << "Status: Using GLEW " << glewGetString(GLEW_VERSION) << std::endl;
+
+    char* s = (char*)glGetString(GL_VERSION);
+    std::cout << "OpenGL version = " << s << std::endl;
 
     try {
         init(argc == 2 ? string(argv[1]) : string("data/face.pn"));
