@@ -27,6 +27,7 @@
 #include "PointCloud.h"
 #include "Camera.h"
 #include "matrixmath.h"
+#include "kd_tree_3d.h"
 using namespace std;
 
 // -------------------------------------------
@@ -81,7 +82,8 @@ R"(
 
 layout(location = 0) in vec3 pos;
 layout(location = 1) in vec3 normal_in;
-
+layout(location = 2) in float knn_distance;
+uniform vec3 eye;
 uniform mat4 projection_modelview;
 
 out vec3 normal;
@@ -90,6 +92,7 @@ out vec3 p;
 void main()
 {
     gl_Position = projection_modelview * vec4(pos,1.0);
+    gl_PointSize = 500.0 * knn_distance / length(pos-eye);
     normal = normal_in;
     p = pos;
 }
@@ -154,7 +157,7 @@ void main()
 )"
 };
 
-enum class DrawingMode { Manuel, OpenGL, OpenGL_VAO_VBO, OpenGL_Shader, NUM_MODE };
+enum class DrawingMode { Manuel, OpenGL_Fixed_Pipeline, OpenGL_Modern, NUM_MODE };
 DrawingMode drawingMode;
 // -------------------------------------------
 // App Code.
@@ -181,7 +184,7 @@ void printUsage() {
         << " d/a : Increase/Decrease matDiffuseCoeff " << endl
         << " x/z : Increase/Decrease matSpecularCoeff " << endl
         << " r/e : Increase/Decrease matSpecularShininess " << endl
-        << " g : Switch between modes : Manuel, OpenGL, OpenGL_VAO_VBO and OpenGL_Shader" << endl
+        << " g : Switch between modes : Manuel, OpenGL_Fixed_Pipeline, OpenGL_Modern" << endl
         << endl;
 }
 
@@ -323,6 +326,26 @@ void init(const string & modelFilename) {
     glEnable(GL_POINT_SMOOTH);
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 
+    std::vector<float> average_dists(pointCloud.size());
+    const int k = 15;
+    {//calculate knn distance
+        std::vector<Vec3f> points;
+        for (unsigned int i = 0; i < pointCloud.size(); i++) 
+            points.push_back(pointCloud(i).position());
+        KdTree3D tree;
+        tree.set_points(points);
+        for (unsigned int i = 0; i < pointCloud.size(); i++){
+            auto p = pointCloud(i).position();
+            std::vector<size_t> indices = tree.query(p, k);
+            float sum_d = 0;
+            for (auto id : indices) {
+                auto p1 = pointCloud(id).position();
+                sum_d += (p1 - p).length();
+            }
+            average_dists[i] = sum_d / indices.size();
+        }
+    }
+
     point_data.clear();
     for (unsigned int i = 0; i < pointCloud.size(); i++) {
         const PointCloud::Point & point = pointCloud(i);
@@ -334,51 +357,50 @@ void init(const string & modelFilename) {
         point_data.push_back(n[0]);
         point_data.push_back(n[1]);
         point_data.push_back(n[2]);
+        point_data.push_back(average_dists[i]);
     }
 
-    
-
-    //VAO, VBO
-    glCreateBuffers(1, &vbo);
-    glNamedBufferStorage(vbo, sizeof(float)*point_data.size(), &point_data[0], 0);
-    //glBindBuffer(GL_ARRAY_BUFFER, vbo);
-    //glBufferData(GL_ARRAY_BUFFER, sizeof(float)*point_data.size(), &point_data[0], GL_STATIC_DRAW);
 
 
-    glCreateVertexArrays(1, &vao);
+    {//VAO, VBO
+        glCreateBuffers(1, &vbo);
+        glNamedBufferStorage(vbo, sizeof(float)*point_data.size(), &point_data[0], 0);
+        glCreateVertexArrays(1, &vao);
 
-    GLuint bindingindex = 0;
-    GLintptr offset = 0;
-    GLsizei stride = 6 * sizeof(float);
-    glVertexArrayVertexBuffer(vao, bindingindex, vbo, offset, stride);
+        GLuint bindingindex = 0;
+        GLintptr offset = 0;
+        GLsizei stride = 7 * sizeof(float);
+        glVertexArrayVertexBuffer(vao, bindingindex, vbo, offset, stride);
 
-    {//bind vertex position data
-        GLuint attrib = 0;
-        GLuint relativeoffset = 0;
-        GLuint components = 3;
-        glVertexArrayAttribBinding(vao, attrib, bindingindex);
-        glVertexArrayAttribFormat(vao, attrib, components, GL_FLOAT, GL_FALSE, relativeoffset);
-        glEnableVertexArrayAttrib(vao, attrib);
+        {//bind vertex position data
+            GLuint attrib = 0;
+            GLuint relativeoffset = 0;
+            GLuint components = 3;
+            glVertexArrayAttribBinding(vao, attrib, bindingindex);
+            glVertexArrayAttribFormat(vao, attrib, components, GL_FLOAT, GL_FALSE, relativeoffset);
+            glEnableVertexArrayAttrib(vao, attrib);
+        }
+        {//bind vertex normal data
+            GLuint attrib = 1;
+            GLuint relativeoffset = 3 * sizeof(float);
+            GLuint components = 3;
+            glVertexArrayAttribBinding(vao, attrib, bindingindex);
+            glVertexArrayAttribFormat(vao, attrib, components, GL_FLOAT, GL_FALSE, relativeoffset);
+            glEnableVertexArrayAttrib(vao, attrib);
+        }
+        {//bind averaged distance
+            GLuint attrib = 2;
+            GLuint relativeoffset = 6 * sizeof(float);
+            GLuint components = 1;
+            glVertexArrayAttribBinding(vao, attrib, bindingindex);
+            glVertexArrayAttribFormat(vao, attrib, components, GL_FLOAT, GL_FALSE, relativeoffset);
+            glEnableVertexArrayAttrib(vao, attrib);
+        }
     }
-    {//bind vertex normal data
-        GLuint attrib = 1;
-        GLuint relativeoffset = 3 * sizeof(float);
-        GLuint components = 3;
-        glVertexArrayAttribBinding(vao, attrib, bindingindex);
-        glVertexArrayAttribFormat(vao, attrib, components, GL_FLOAT, GL_FALSE, relativeoffset);
-        glEnableVertexArrayAttrib(vao, attrib);
-    }
-
-    //glVertexPointer(3, GL_FLOAT, 6 * sizeof(float), 0);
-    //glEnableClientState(GL_VERTEX_ARRAY);
-#define BUFFER_OFFSET(offset) ((void*) (offset))
-    //glNormalPointer(GL_FLOAT, 6 * sizeof(float), BUFFER_OFFSET(sizeof(float) * 3));
-    //glEnableClientState(GL_NORMAL_ARRAY);
-
 
     //shader
     compile_shader();
-    
+
     //uniform
     update_uniforms();
 }
@@ -392,9 +414,10 @@ void render() {
     camera.getPos(eye[0], eye[1], eye[2]);
 
     switch (drawingMode) {
-    case DrawingMode::Manuel: {glPointSize(pointSize);
+    case DrawingMode::Manuel: {
+        glPointSize(pointSize);
         glBegin(GL_POINTS);
-        
+
         for (unsigned int i = 0; i < pointCloud.size(); i++) {
             const PointCloud::Point & point = pointCloud(i);
             const Vec3f & p = point.position();
@@ -442,8 +465,7 @@ void render() {
         glEnd();
         break;
     }
-    case DrawingMode::OpenGL:
-    case DrawingMode::OpenGL_VAO_VBO: {
+    case DrawingMode::OpenGL_Fixed_Pipeline: {
         glEnable(GL_LIGHTING);
         glDisable(GL_COLOR_MATERIAL);
         glLightModeli(GL_LIGHT_MODEL_LOCAL_VIEWER, GL_TRUE); // realistic specular light
@@ -471,27 +493,20 @@ void render() {
         glMaterialfv(GL_FRONT_AND_BACK, GL_SHININESS, &lighting.matSpecularShininess);
 
         glPointSize(pointSize);
+        glBegin(GL_POINTS);
+        for (unsigned int i = 0; i < pointCloud.size(); i++) {
+            const PointCloud::Point & point = pointCloud(i);
+            const Vec3f & p = point.position();
+            const Vec3f & n = point.normal();
+            glNormal3f(n[0], n[1], n[2]);
+            glVertex3f(p[0], p[1], p[2]);
+        }
+        glEnd();
 
-        if (drawingMode == DrawingMode::OpenGL_VAO_VBO || drawingMode == DrawingMode::OpenGL_Shader) {
-            glBindVertexArray(vao);
-            glDrawArrays(GL_POINTS, 0, pointCloud.size());
-            glBindVertexArray(0);
-        }
-        else {
-            glBegin(GL_POINTS);
-            for (unsigned int i = 0; i < pointCloud.size(); i++) {
-                const PointCloud::Point & point = pointCloud(i);
-                const Vec3f & p = point.position();
-                const Vec3f & n = point.normal();
-                glNormal3f(n[0], n[1], n[2]);
-                glVertex3f(p[0], p[1], p[2]);
-            }
-            glEnd();
-        }
         glDisable(GL_LIGHTING);
         break;
     }
-    case DrawingMode::OpenGL_Shader: {
+    case DrawingMode::OpenGL_Modern: {
         {//projection model view matrix
             GLfloat trans[4][4];
             math::translation_matrix(trans, -camera.x, -camera.y, -camera.z - camera._zoom);
@@ -518,6 +533,7 @@ void render() {
 
 
         //draw
+        glPointSize(pointSize);
         glBindVertexArray(vao);
         glDrawArrays(GL_POINTS, 0, pointCloud.size());
         glBindVertexArray(0);
@@ -609,21 +625,20 @@ void key(unsigned char keyPressed, int x, int y) {
         case DrawingMode::Manuel:
             std::cout << "Manuel lighting" << std::endl;
             break;
-        case DrawingMode::OpenGL:
+        case DrawingMode::OpenGL_Fixed_Pipeline:
             std::cout << "OpenGL" << std::endl;
             break;
-        case DrawingMode::OpenGL_VAO_VBO:
-            std::cout << "OpenGL_VAO_VBO" << std::endl;
-            break;
-        case DrawingMode::OpenGL_Shader:
+        case DrawingMode::OpenGL_Modern:
             std::cout << "OpenGL_Shader" << std::endl;
             break;
         }
-        if (drawingMode == DrawingMode::OpenGL_Shader) {
+        if (drawingMode == DrawingMode::OpenGL_Modern) {
             glUseProgram(gl_program);
+            glEnable(GL_PROGRAM_POINT_SIZE);
         }
         else {
             glUseProgram(0);
+            glDisable(GL_PROGRAM_POINT_SIZE);
         }
         break;
     case 'q':
