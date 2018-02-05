@@ -509,7 +509,7 @@ void render() {
     case DrawingMode::OpenGL_Modern: {
         {//projection model view matrix
             GLfloat trans[4][4];
-            math::translation_matrix(trans, -camera.x, -camera.y, -camera.z - camera._zoom);
+            math::translation_matrix(trans, camera.x, camera.y, camera.z - camera._zoom);
             GLfloat rot[4][4];
             build_rotmatrix(rot, camera.curquat);
             math::transpose_in_place(rot);
@@ -649,6 +649,7 @@ void key(unsigned char keyPressed, int x, int y) {
         printUsage();
         break;
     }
+    update_uniforms();
     idle();
 }
 
