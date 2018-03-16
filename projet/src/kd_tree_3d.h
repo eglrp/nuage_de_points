@@ -59,14 +59,16 @@ class KdTree3D
     > my_kd_tree_t;
     std::unique_ptr<my_kd_tree_t> kdtree;
     std::unique_ptr<PointCloudAdaptor> points_adaptor;
+    std::vector<Eigen::Vector3f> pts;
 public:
     KdTree3D() {
         kdtree = nullptr;
     }
 
-    void set_points(const Eigen::Vector3f* pt_begin, int n) {
+    void set_points(const std::vector<Eigen::Vector3f>& pts_) {
+        pts = pts_;
         kdtree = nullptr;
-        points_adaptor = std::make_unique<PointCloudAdaptor>(pt_begin, n);
+        points_adaptor = std::make_unique<PointCloudAdaptor>(pts.data(), pts.size());
         kdtree = std::make_unique<my_kd_tree_t>(
             3, *points_adaptor, nanoflann::KDTreeSingleIndexAdaptorParams(20 /* max leaf */));
         kdtree->buildIndex();
@@ -80,8 +82,13 @@ public:
         return int(ret_index);
     }
 
-    void query_radius(Eigen::Vector3f p, float radius, std::vector<std::pair<size_t, float> >& ret_matches) const {
+    void query_radius(Eigen::Vector3f p, float radius, std::vector<Eigen::Vector3f>& points) const {
         nanoflann::SearchParams params;
+        std::vector<std::pair<size_t, float> > ret_matches;
         kdtree->radiusSearch(&p[0], radius, ret_matches, params);
+        points.clear();
+        for (const auto& r : ret_matches) {
+            points.push_back(points_adaptor->derived()[r.first]);
+        }
     }
 };

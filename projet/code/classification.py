@@ -53,7 +53,7 @@ PCA_FEATURE_SIZE = 6 + 1
 SCALE_SIZE = 5
 BALL_NUMBER = 7
 FEATURE_SIZE = SCALE_SIZE * BALL_NUMBER * PCA_FEATURE_SIZE
-CLASS_SIZE = 13
+CLASS_SIZE = 6
 
 target_names = ['C{}'.format(i) for i in range(CLASS_SIZE)]
 
@@ -93,8 +93,8 @@ def advanced_point_choice(num_per_class_global, label_names):
 
     # feature_caches = ['../feature_cache_1.npz', '../feature_cache_2.npz', '../feature_cache_3.npz']
     # filenames = ['../data/feature_1.ply', '../data/feature_2.ply', '../data/feature_3.ply']
-    feature_caches = ['../feature_cache_1.npz']
-    filenames = ['../data/feature_area_3.ply']
+    feature_caches = ['../madame_cache_1.npz']
+    filenames = ['../data/madame_1.ply']
     # Loop over each training cloud
     for i in range(len(filenames)):
         # Load Training cloud
@@ -118,20 +118,17 @@ def advanced_point_choice(num_per_class_global, label_names):
         training_inds = np.empty(0, dtype=np.int32)
 
         min_n = 1e100
-        for label, name in label_names.items():
-            if label != 0:
-                n = np.sum(labels == label)
-                min_n = min(n, min_n)
+        for label in range(CLASS_SIZE):
+            n = np.sum(labels == label)
+            min_n = min(n, min_n)
 
         if num_per_class > min_n:
             # num_per_class = min_n
             print("Minimum number of sample per class is only {}".format(min_n))
 
         # Loop over each class to choose training points
-        for label, name in label_names.items():
-            # Do not include class 0 in training
-            if label == 0:
-                continue
+        for label in range(CLASS_SIZE):
+
 
             # Collect all indices of the current class
             label_inds = np.where(labels == label)[0]
@@ -170,7 +167,7 @@ def print_weight_count(model):
     print('total_size = {}'.format(total_size))
 
 
-def mlp(useGPU, X, y, y_weight, challengeX, challengeY):
+def mlp(useGPU, X, y, y_weight, test_X, test_Y):
     # Train a MLP
     # ********************************
     #
@@ -189,18 +186,22 @@ def mlp(useGPU, X, y, y_weight, challengeX, challengeY):
 
     with Timer('Training MLP'):
         y_onehot = np_utils.to_categorical(y, CLASS_SIZE)  # one hot
-        history = model.fit(X, y_onehot, epochs=50,
-                            batch_size=2048, verbose=2, validation_split=0.1, sample_weight=y_weight)
+        test_Y_one_hot = np_utils.to_categorical(test_Y, CLASS_SIZE)
+        history = model.fit(X, y_onehot, epochs=10,
+                            batch_size=2048, verbose=2,
+                            # validation_split=0.1,
+                            validation_data=(test_X, test_Y_one_hot),
+                            sample_weight=y_weight)
 
     with Timer('Test'):
-        y_prob = model.predict(challengeX)
+        y_prob = model.predict(test_X)
         predictions = y_prob.argmax(axis=1)
         confidence = y_prob.max(axis=1)
-        print(classification_report(challengeY, predictions, target_names=target_names))
+        print(classification_report(test_Y, predictions, target_names=target_names))
     return predictions, confidence
 
 
-def mlp_conv(useGPU, X, y, y_weight, challengeX, challengeY):
+def mlp_conv(useGPU, X, y, y_weight, test_X, test_Y):
     # Train a MLP
     # ********************************
     #
@@ -208,8 +209,13 @@ def mlp_conv(useGPU, X, y, y_weight, challengeX, challengeY):
     with tf.device(device):
         model = Sequential()
         model.add(Reshape((SCALE_SIZE * BALL_NUMBER, PCA_FEATURE_SIZE, 1), input_shape=(FEATURE_SIZE,)))
+
+        # two layer 1d conv on pca feature for each ball
         model.add(Conv2D(8, (1, PCA_FEATURE_SIZE), activation='relu'))
+        model.add(Reshape((SCALE_SIZE * BALL_NUMBER, 8, 1)))
+        model.add(Conv2D(8, (1, 8), activation='relu'))
         model.add(Reshape((SCALE_SIZE, BALL_NUMBER, -1)))
+
         model.add(Conv2D(8, (1, BALL_NUMBER), activation='relu'))
         model.add(Flatten())
         model.add(Dense(20, activation='relu'))
@@ -223,18 +229,22 @@ def mlp_conv(useGPU, X, y, y_weight, challengeX, challengeY):
 
     with Timer('Training MLP'):
         y_onehot = np_utils.to_categorical(y, CLASS_SIZE)  # one hot
-        history = model.fit(X, y_onehot, epochs=50,
-                            batch_size=2048, verbose=2, validation_split=0.1, sample_weight=y_weight)
+        test_Y_one_hot = np_utils.to_categorical(test_Y, CLASS_SIZE)
+        history = model.fit(X, y_onehot, epochs=100,
+                            batch_size=2048, verbose=2,
+                            #validation_split=0.1,
+                            validation_data=(test_X, test_Y_one_hot),
+                            sample_weight=y_weight)
 
     with Timer('Test'):
-        y_prob = model.predict(challengeX)
+        y_prob = model.predict(test_X)
         predictions = y_prob.argmax(axis=1)
         confidence = y_prob.max(axis=1)
-        print(classification_report(challengeY, predictions, target_names=target_names))
+        print(classification_report(test_Y, predictions, target_names=target_names))
     return predictions, confidence
 
 
-def random_forest(X, y, y_weight, challengeX, challengeY):
+def random_forest(X, y, y_weight, test_X, test_Y):
     X_train, X_test, y_train, y_test, y_weight_train, _ = \
         train_test_split(X, y, y_weight, test_size=0.1, random_state=42)
     with Timer('Training Random Forest'):
@@ -246,13 +256,13 @@ def random_forest(X, y, y_weight, challengeX, challengeY):
         print(classification_report(y_test, y_pred, target_names=target_names))
 
     with Timer('Test'):
-        predictions = clf.predict(challengeX)
-        print(classification_report(challengeY, predictions, target_names=target_names))
+        predictions = clf.predict(test_X)
+        print(classification_report(test_Y, predictions, target_names=target_names))
     return predictions
 
 
-def training_and_test(useGPU=True, useMLP=True, useMLP_Conv=True, useRF=True):
-    num_per_class = 2000
+def training_and_test(useGPU=True, useMLP=False, useMLP_Conv=True, useRF=True):
+    num_per_class = 3000
     # label_names = {0: 'Unclassified',
     #                1: 'Ground',
     #                2: 'Building',
@@ -261,19 +271,12 @@ def training_and_test(useGPU=True, useMLP=True, useMLP_Conv=True, useRF=True):
     #                5: 'Cars',
     #                6: 'Signage'}
 
-    label_names = {0: 'Unclassified',
+    label_names = {0: 'C0',
                    1: 'C1',
                    2: 'C2',
                    3: 'C3',
                    4: 'C4',
-                   5: 'C5',
-                   6: 'C6',
-                   7: 'C7',
-                   8: 'C8',
-                   9: 'C9',
-                   10: 'C10',
-                   11: 'C11',
-                   12: 'C12'}
+                   5: 'C5',}
 
     # Collect training features / labels
     # **********************************
@@ -284,66 +287,58 @@ def training_and_test(useGPU=True, useMLP=True, useMLP_Conv=True, useRF=True):
         y_weight = class_weight.compute_sample_weight('balanced', y)
 
     # Load cloud as a [N x 3] matrix
-    # points_challenge = load_pts('../data/Lille_street_test.ply')
-    points_challenge = load_pts('../data/checkfeature_area_4.ply')
     with Timer('Collect Testing Features'):
-        challenge_cache = '../feature_test_cache.npz'
-        if exists(challenge_cache):
+        pt_cloud_test = load_pts('../data/check_madame_2.ply')
+        test_cache = '../madame_cache_2.npz'
+        if exists(test_cache):
             with Timer('!!Read from last Cache!!'):
-                challengeX, challengeY = np.load(challenge_cache)
+                f = np.load(test_cache)
+                test_X = f['features']
+                test_Y = f['labels']
         else:
             with Timer('reading ply'):
-                challengeX, challengeY = load_features_label('../data/feature_area_4.ply')
-                np.savez(challenge_cache, challengeX=challengeX, challengeY=challengeY)
-        if not np.isfinite(challengeX).all():
+                filename = '../data/madame_2.ply'
+                test_X, test_Y = load_features_label(filename)
+                np.savez(test_cache, features=test_X, labels=test_Y)
+        if not np.isfinite(test_X).all():
             print("feature_test contains nan or inf!")
             exit()
 
     if useRF:
-        predictions = random_forest(X, y, y_weight, challengeX, challengeY)
-
-        with Timer('Save predictions'):
-            np.savetxt('../Lille_street_test_preds_RF.txt', predictions, fmt='%d')
-
+        predictions = random_forest(X, y, y_weight, test_X, test_Y)
         with Timer('Save predictions ply'):
-            write_ply('../Lille_street_test_preds_RF.ply',
-                      [points_challenge, predictions.astype(np.uint8)], ['x', 'y', 'z', 'labels'])
+            write_ply('../preds_RF.ply',
+                      [pt_cloud_test, predictions.astype(np.uint8)], ['x', 'y', 'z', 'labels'])
 
     if useMLP:
-        predictions, confidence = mlp(useGPU, X, y, y_weight, challengeX, challengeY)
-        with Timer('Save predictions'):
-            np.savetxt('../Lille_street_test_preds_MLP.txt', predictions, fmt='%d')
-
+        predictions, confidence = mlp(useGPU, X, y, y_weight, test_X, test_Y)
         with Timer('Save predictions ply'):
-            write_ply('../Lille_street_test_preds_MLP.ply',
-                      [points_challenge, predictions.astype(np.uint8)], ['x', 'y', 'z', 'labels'])
+            write_ply('../preds_MLP.ply',
+                      [pt_cloud_test, predictions.astype(np.uint8)], ['x', 'y', 'z', 'labels'])
             predictions_90 = predictions * (confidence > 0.9)
-            write_ply('../Lille_street_test_preds_MLP_90.ply',
-                      [points_challenge, predictions_90.astype(np.uint8)], ['x', 'y', 'z', 'labels'])
+            write_ply('../preds_MLP_90.ply',
+                      [pt_cloud_test, predictions_90.astype(np.uint8)], ['x', 'y', 'z', 'labels'])
             predictions_95 = predictions * (confidence > 0.95)
-            write_ply('../Lille_street_test_preds_MLP_95.ply',
-                      [points_challenge, predictions_95.astype(np.uint8)], ['x', 'y', 'z', 'labels'])
+            write_ply('../preds_MLP_95.ply',
+                      [pt_cloud_test, predictions_95.astype(np.uint8)], ['x', 'y', 'z', 'labels'])
             predictions_99 = predictions * (confidence > 0.99)
-            write_ply('../Lille_street_test_preds_MLP_99.ply',
-                      [points_challenge, predictions_99.astype(np.uint8)], ['x', 'y', 'z', 'labels'])
+            write_ply('../preds_MLP_99.ply',
+                      [pt_cloud_test, predictions_99.astype(np.uint8)], ['x', 'y', 'z', 'labels'])
 
     if useMLP_Conv:
-        predictions, confidence = mlp_conv(useGPU, X, y, y_weight, challengeX, challengeY)
-        with Timer('Save predictions'):
-            np.savetxt('../Lille_street_test_preds_MLPconv.txt', predictions, fmt='%d')
-
+        predictions, confidence = mlp_conv(useGPU, X, y, y_weight, test_X, test_Y)
         with Timer('Save predictions ply'):
-            write_ply('../Lille_street_test_preds_MLPconv.ply',
-                      [points_challenge, predictions.astype(np.uint8)], ['x', 'y', 'z', 'labels'])
+            write_ply('../preds_MLPconv.ply',
+                      [pt_cloud_test, predictions.astype(np.uint8)], ['x', 'y', 'z', 'labels'])
             predictions_90 = predictions * (confidence > 0.9)
-            write_ply('../Lille_street_test_preds_MLPconv_90.ply',
-                      [points_challenge, predictions_90.astype(np.uint8)], ['x', 'y', 'z', 'labels'])
+            write_ply('../preds_MLPconv_90.ply',
+                      [pt_cloud_test, predictions_90.astype(np.uint8)], ['x', 'y', 'z', 'labels'])
             predictions_95 = predictions * (confidence > 0.95)
-            write_ply('../Lille_street_test_preds_MLPconv_95.ply',
-                      [points_challenge, predictions_95.astype(np.uint8)], ['x', 'y', 'z', 'labels'])
+            write_ply('../preds_MLPconv_95.ply',
+                      [pt_cloud_test, predictions_95.astype(np.uint8)], ['x', 'y', 'z', 'labels'])
             predictions_99 = predictions * (confidence > 0.99)
-            write_ply('../Lille_street_test_preds_MLPconv_99.ply',
-                      [points_challenge, predictions_99.astype(np.uint8)], ['x', 'y', 'z', 'labels'])
+            write_ply('../preds_MLPconv_99.ply',
+                      [pt_cloud_test, predictions_99.astype(np.uint8)], ['x', 'y', 'z', 'labels'])
 
 
 if __name__ == '__main__':

@@ -10,14 +10,14 @@
 #include <numeric>
 #include <random>
 #include <memory>
-
-
+#include <array>
+#include <map>
+#include "scope_timer.h"
 typedef std::chrono::time_point<std::chrono::high_resolution_clock> timepoint;
-std::chrono::high_resolution_clock c;
 
 inline std::chrono::time_point<std::chrono::high_resolution_clock> now()
 {
-    return c.now();
+    return std::chrono::high_resolution_clock::now();
 }
 
 inline double difference_millis(timepoint start, timepoint end)
@@ -32,7 +32,7 @@ inline double difference_second(timepoint start, timepoint end)
 
 const double PI = 3.141592653589793238463;
 
-void read_point_cloud(const std::string & filename, std::vector<Eigen::Vector3f>& verts, std::vector<int32_t>& ls, bool has_labels = true)
+void read_point_cloud(const std::string & filename, std::vector<Eigen::Vector3f>& verts, std::vector<int32_t>& ls)
 {
     std::ifstream ss(filename, std::ios::binary);
 
@@ -69,10 +69,10 @@ void read_point_cloud(const std::string & filename, std::vector<Eigen::Vector3f>
     // like vertex position are hard-coded: 
     try { vertices = file.request_properties_from_element("vertex", { "x", "y", "z" }); }
     catch (const std::exception & e) { std::cerr << "tinyply exception: " << e.what() << std::endl; }
-    if (has_labels) {
-        try { labels = file.request_properties_from_element("vertex", { "class" }); }
-        catch (const std::exception & e) { std::cerr << "tinyply exception: " << e.what() << std::endl; }
-    }
+
+    try { labels = file.request_properties_from_element("vertex", { "class" }); }
+    catch (const std::exception & e) { std::cerr << "tinyply exception: " << e.what() << std::endl; }
+
 
     timepoint before = now();
     file.read(ss);
@@ -83,17 +83,14 @@ void read_point_cloud(const std::string & filename, std::vector<Eigen::Vector3f>
     if (vertices) std::cout << "\tRead " << vertices->count << " total vertices " << std::endl;
     if (labels) std::cout << "\tRead " << labels->count << " total labels " << std::endl;
 
-
     const size_t numVerticesBytes = vertices->buffer.size_bytes();
     verts.resize(vertices->count);
     std::memcpy(verts.data(), vertices->buffer.get(), numVerticesBytes);
 
+    const size_t numLablesBytes = labels->buffer.size_bytes();
+    ls.resize(labels->count);
+    std::memcpy(ls.data(), labels->buffer.get(), numLablesBytes);
 
-    if (has_labels) {
-        const size_t numLablesBytes = labels->buffer.size_bytes();
-        ls.resize(labels->count);
-        std::memcpy(ls.data(), labels->buffer.get(), numLablesBytes);
-    }
 }
 
 void local_pca(std::vector<Eigen::Vector3f>& pts, Eigen::Matrix3f& evec, Eigen::Vector3f& evar) {
@@ -123,27 +120,20 @@ void local_pca(std::vector<Eigen::Vector3f>& pts, Eigen::Matrix3f& evec, Eigen::
     evar = es.eigenvalues();
 }
 
-struct ShapeFeature
-{
-    float vertical_spreads, total_spreads, verticality, linearity, planarity, sphericity;
-};
-
-std::pair<Eigen::Matrix3f, Eigen::Vector3f> neighborhood_PCA(const Eigen::Vector3f& query,
-    const std::vector<Eigen::Vector3f>& pts, KdTree3D& tree, float radius, int& nb_count) {
-    std::vector<std::pair<size_t, float> > ret_matches;
-    tree.query_radius(query, radius, ret_matches);
-    const int N = ret_matches.size();
+std::pair<Eigen::Matrix3f, Eigen::Vector3f> neighborhood_PCA(
+    const Eigen::Vector3f& query, KdTree3D& tree, float radius, int& nb_count) {
+    std::vector<Eigen::Vector3f> nbs;
+    tree.query_radius(query, radius, nbs);
+    const int N = nbs.size();
     nb_count = N;
-    std::vector<Eigen::Vector3f> nbs(N);
-    for (int i = 0; i < N; i++)
-        nbs[i] = pts[ret_matches[i].first];
-
-
     Eigen::Matrix3f evec;
     Eigen::Vector3f evar;
     local_pca(nbs, evec, evar);
     return std::make_pair(evec, evar);
 }
+
+const int PCA_FEATURE_N = 6;
+typedef std::array<float, PCA_FEATURE_N> ShapeFeature;
 ShapeFeature compute_features_with_eigen(const std::pair<Eigen::Matrix3f, Eigen::Vector3f>& eigens, float radius) {
 
 
@@ -188,62 +178,105 @@ ShapeFeature compute_features_with_eigen(const std::pair<Eigen::Matrix3f, Eigen:
     return ShapeFeature{ vertical_spreads, total_spreads, verticality, linearity, planarity, sphericity };
 }
 
+void grid_subsample(const std::vector<Eigen::Vector3f>& pts, const std::vector<int32_t>& labels,
+    std::vector<Eigen::Vector3f>& sub_pts, std::vector<int32_t>& sub_labels, float size) {
+    sub_pts.clear();
+    sub_labels.clear();
+    //Eigen::Vector3f max_corner(-1e100, -1e100, -1e100);
+    //Eigen::Vector3f min_corner(1e100, 1e100, 1e100);
+    //for (const auto& p : pts) {
+    //    for (int i = 0; i < 3; i++) {
+    //        max_corner[i] = std::max(max_corner[i], p[i]);
+    //        min_corner[i] = std::min(min_corner[i], p[i]);
+    //    }
+    //}
+    typedef std::array<int, 3> Index;
+    typedef int32_t label_t;
+    std::map<Index, std::map<label_t, std::vector<Eigen::Vector3f> > > grids;
+    for (int a = 0; a < pts.size(); a++) {
+        Eigen::Vector3f ijk = (pts[a] / size).array().floor();
+        int i = ijk[0], j = ijk[1], k = ijk[2];
+        grids[{i, j, k}][labels[a]].push_back(pts[a]);
+    }
+    for (auto& it : grids) {
+        const auto& points_by_classes = it.second;
+        for (auto& itc : points_by_classes) {
+            label_t cls = itc.first;
+            const std::vector<Eigen::Vector3f>& points = itc.second;
+            Eigen::Vector3f s(0.f, 0.f, 0.f);
+            for (const auto& p : points)
+                s += p;
+            s /= points.size();
+            sub_pts.push_back(s);
+            sub_labels.push_back(cls);
+        }
+    }
+}
+
 //#pragma optimize( "", off )  
 
-void process_file(const std::string& file, const std::string& output_name, bool is_test_file) {
-    const int CLASS_NUMBER = 13;
+void process_file(const std::string& file, const std::string& output_name) {
+    const int RAW_CLASS_NUMBER = 27;
+    const int CLASS_NUMBER = 6;
+    std::vector<int> class_mapping(RAW_CLASS_NUMBER, -1);
+    class_mapping[1] = 0;//Facade
+    class_mapping[2] = 1;//Ground
+    class_mapping[4] = 2;//Cars
+    class_mapping[10] = 3;//Moto
+    class_mapping[14] = 4;//Traffic signs
+    class_mapping[9] = 5;//Pedestrians
+    class_mapping[22] = 5;//Pedestrians
+    class_mapping[24] = 5;//Pedestrians
+
     //read file
     const int max_sample_per_class = 3000;
-    std::vector<Eigen::Vector3f> pts_origin;
-    std::vector<int32_t> labels_origin;
-    bool has_labels = !is_test_file;
-    read_point_cloud(file, pts_origin, labels_origin, has_labels);
-    const int point_count = pts_origin.size();
-
-    //shuffle points
-    std::vector<int> indices(point_count);
-    std::iota(indices.begin(), indices.end(), 0);
-    std::random_device rd;
-    std::mt19937 g(rd());
-    if (!is_test_file)
-        std::shuffle(indices.begin(), indices.end(), g);
-
-    std::vector<Eigen::Vector3f> pts(point_count);
-    std::vector<int32_t> labels(point_count);
-#pragma omp parallel for  
-    for (int i = 0; i < pts.size(); i++) {
-        pts[i] = pts_origin[indices[i]];
-        if (has_labels)
-            labels[i] = labels_origin[indices[i]];
+    std::vector<Eigen::Vector3f> pts;
+    std::vector<int32_t> labels;
+    {
+        ScopeTimer t("read file", true, false);
+        read_point_cloud(file, pts, labels);
     }
 
     //select points
-    std::vector<int> indices_taken;
-    std::vector<int> labels_out;
-    labels_out.reserve(pts.size());
-    std::vector<int> class_count(CLASS_NUMBER, 0);
-    std::vector<Eigen::Vector3f> pts_out;
-    pts_out.reserve(pts.size());
-    for (int i = 0; i < pts.size(); i++) {
-        if (has_labels) {
-            int label = labels[i];
+    std::vector<int> labels_select;
+    std::vector<Eigen::Vector3f> pts_select;
+    {
+        ScopeTimer t("select pts per class", true, false);
+
+        std::random_device rd;
+        std::mt19937 g(rd());
+        std::vector<int> indices(pts.size());
+        std::iota(indices.begin(), indices.end(), 0);
+        std::shuffle(indices.begin(), indices.end(), g);
+
+        labels_select.reserve(pts.size());
+        std::vector<int> class_count(CLASS_NUMBER, 0);
+        pts_select.reserve(pts.size());
+        for (int i : indices) {
+            int label = class_mapping[labels[i]];
+            if (label == -1) continue;
+            if (label >= CLASS_NUMBER) {
+                std::cout << "wrong class number : " << label << std::endl;
+                exit(1);
+            }
             if (class_count[label] >= max_sample_per_class)
                 continue;
+
             class_count[label]++;
-            labels_out.push_back(label);
+            labels_select.push_back(label);
+            pts_select.push_back(pts[i]);
         }
-        indices_taken.push_back(i);
-        pts_out.push_back(pts[i]);
+        std::cout << pts_select.size() << " points selected for features : " << std::endl;
+        for (int i = 0; i < CLASS_NUMBER; i++)
+            std::cout << class_count[i] << " points for class " << i << std::endl;
+        std::cout << std::endl;
+
     }
-    const int output_size = indices_taken.size();
-    std::cout << output_size << " points selected for features" << std::endl;
-
-
 
     //parameters
     std::vector<float> radii{ 0.25, 0.5, 1, 2, 4 };
+    std::vector<float> grid_size{ 0.0125f, 0.025f, 0.05f, 0.1f, 0.2f };
     const int SCALE_NUMBER = radii.size();
-    const int PCA_FEATURE_N = 6;
     const int BALL_NUMBER = 7;
     const int FEATURE_N = BALL_NUMBER * (PCA_FEATURE_N + 1)*SCALE_NUMBER;
     const float offset_coeff = 1.0;
@@ -260,20 +293,22 @@ void process_file(const std::string& file, const std::string& output_name, bool 
 
     //build tree
     std::vector<std::unique_ptr<KdTree3D>> trees;
-    std::vector<Eigen::Vector3f> pts_shuffle = pts;
-    std::shuffle(pts_shuffle.begin(), pts_shuffle.end(), g);
-    for (int k = 0; k < SCALE_NUMBER; k++) {
-        trees.push_back(std::make_unique<KdTree3D>());
-        const float base = 0.5f;
-        float r = std::max(radii[k], base);
-        float fraction = base*base / r / r;
-        int pts_n = std::min(int(point_count * fraction), point_count);
-        trees.back()->set_points(pts_shuffle.data(), pts_n);
+    {
+        ScopeTimer t("build tree", true, false);
+        std::cout << pts.size() << " points in total" << std::endl;
+        for (int k = 0; k < SCALE_NUMBER; k++) {
+            trees.push_back(std::make_unique<KdTree3D>());
+            std::vector<Eigen::Vector3f> sub_pts;
+            std::vector<int32_t> sub_labels;
+            grid_subsample(pts, labels, sub_pts, sub_labels, grid_size[k]);
+            std::cout << sub_pts.size() << " points for scale " << radii[k] << std::endl;
+            trees.back()->set_points(sub_pts);
+        }
     }
 
 
-    std::vector<float> features(output_size * FEATURE_N);
-    std::vector<float> features_one(output_size * PCA_FEATURE_N);
+    std::vector<float> features(pts_select.size() * FEATURE_N);
+    std::vector<float> features_one(pts_select.size() * PCA_FEATURE_N);
 
     std::cout << "Features calculation ..." << std::endl;
     timepoint before = now();
@@ -281,8 +316,8 @@ void process_file(const std::string& file, const std::string& output_name, bool 
 
 
 #pragma omp parallel for  
-    for (int i = 0; i < output_size; i++) {
-        auto& p = pts_out[i];
+    for (int i = 0; i < pts_select.size(); i++) {
+        auto& p = pts_select[i];
 
         float* f = &features[i*FEATURE_N];
         float* f_one = &features_one[i * PCA_FEATURE_N];
@@ -290,24 +325,16 @@ void process_file(const std::string& file, const std::string& output_name, bool 
         for (int k = 0; k < radii.size(); k++) {
             float radius = radii[k];
             int nb_count;
-            const auto eigen_pair = neighborhood_PCA(p, pts_shuffle, *trees[k], radius, nb_count);
+            const auto eigen_pair = neighborhood_PCA(p, *trees[k], radius, nb_count);
             if (nb_count == 0) nb_count = 1;
             ShapeFeature sf = compute_features_with_eigen(eigen_pair, radius);
             float density_ratio = 1.;
             *f++ = density_ratio;
-            *f++ = sf.vertical_spreads;
-            *f++ = sf.total_spreads;
-            *f++ = sf.verticality;
-            *f++ = sf.linearity;
-            *f++ = sf.planarity;
-            *f++ = sf.sphericity;
+            for (int s = 0; s < PCA_FEATURE_N; s++)
+                *f++ = sf[s];
             if (k == 1) {
-                *f_one++ = sf.vertical_spreads;
-                *f_one++ = sf.total_spreads;
-                *f_one++ = sf.verticality;
-                *f_one++ = sf.linearity;
-                *f_one++ = sf.planarity;
-                *f_one++ = sf.sphericity;
+                for (int s = 0; s < PCA_FEATURE_N; s++)
+                    *f_one++ = sf[s];
             }
             const Eigen::Matrix3f& evec = eigen_pair.first;
             Eigen::Vector3f normal = evec.col(0);
@@ -333,16 +360,12 @@ void process_file(const std::string& file, const std::string& output_name, bool 
             for (auto& offset : offsets) {
                 int nb_count_offset;
                 auto offset_direction = offset[0] * axis[0] + offset[1] * axis[1] + offset[2] * axis[2];
-                const auto eigens = neighborhood_PCA(p + radius * offset_direction, pts_shuffle, *trees[k], radius, nb_count_offset);
+                const auto eigens = neighborhood_PCA(p + radius * offset_direction, *trees[k], radius, nb_count_offset);
                 ShapeFeature sf = compute_features_with_eigen(eigens, radius);
                 float density_ratio = float(nb_count_offset) / nb_count;
                 *f++ = density_ratio;
-                *f++ = sf.vertical_spreads;
-                *f++ = sf.total_spreads;
-                *f++ = sf.verticality;
-                *f++ = sf.linearity;
-                *f++ = sf.planarity;
-                *f++ = sf.sphericity;
+                for (int s = 0; s < PCA_FEATURE_N; s++)
+                    *f++ = sf[s];
             }
         }
     }
@@ -356,22 +379,24 @@ void process_file(const std::string& file, const std::string& output_name, bool 
     std::ofstream out(output_name, binary ? std::ios::binary : 0);
     tinyply::PlyFile out_file;
 
-    if (has_labels)
-        out_file.add_properties_to_element("feature", { "label" }, tinyply::Type::UINT32, labels_out.size(),
-            reinterpret_cast<uint8_t*>(labels_out.data()), tinyply::Type::INVALID, 0);
+    {
+        out_file.add_properties_to_element("feature", { "label" }, tinyply::Type::UINT32, labels_select.size(),
+            reinterpret_cast<uint8_t*>(labels_select.data()), tinyply::Type::INVALID, 0);
 
-    out_file.add_properties_to_element("feature", { "entries" }, tinyply::Type::FLOAT32, features.size(),
-        reinterpret_cast<uint8_t*>(features.data()), tinyply::Type::UINT32, FEATURE_N);
-    out_file.write(out, binary);
-    out.close();
-
-    if (!is_test_file) {
-        std::ofstream out2(std::string("check") + output_name, binary ? std::ios::binary : 0);
+        out_file.add_properties_to_element("feature", { "entries" }, tinyply::Type::FLOAT32, features.size(),
+            reinterpret_cast<uint8_t*>(features.data()), tinyply::Type::UINT32, FEATURE_N);
+        out_file.write(out, binary);
+        out.close();
+    }
+    {
+        std::ofstream out2(std::string("check_") + output_name, binary ? std::ios::binary : 0);
         tinyply::PlyFile out2_file;
 
-        out2_file.add_properties_to_element("vertex", { "x", "y", "z" }, tinyply::Type::FLOAT32, pts_out.size() * 3,
-            reinterpret_cast<uint8_t*>(pts_out.data()), tinyply::Type::INVALID, 0);
-        out2_file.add_properties_to_element("vertex", { "vertical_spreads", "total_spreads", "linearity", "planarity", "sphericity" },
+        out2_file.add_properties_to_element("vertex", { "x", "y", "z" }, tinyply::Type::FLOAT32, pts_select.size() * 3,
+            reinterpret_cast<uint8_t*>(pts_select.data()), tinyply::Type::INVALID, 0);
+        out2_file.add_properties_to_element("feature", { "label" }, tinyply::Type::UINT32, labels_select.size(),
+            reinterpret_cast<uint8_t*>(labels_select.data()), tinyply::Type::INVALID, 0);
+        out2_file.add_properties_to_element("vertex", { "vertical_spreads", "total_spreads", "verticality", "linearity", "planarity", "sphericity" },
             tinyply::Type::FLOAT32, features_one.size(), reinterpret_cast<uint8_t*>(features_one.data()), tinyply::Type::INVALID, 0);
         out2_file.write(out2, binary);
         out2.close();
@@ -382,12 +407,12 @@ void process_file(const std::string& file, const std::string& output_name, bool 
 
 int main(int argc, char *argv[])
 {
-    std::string file1("D:/data/Area_3.ply");
-    std::string name1("feature_area_3.ply");
-    process_file(file1, name1, false);
+    //std::string file1("D:/data/rueMadame/GT_Madame1_2.ply");
+    //std::string name1("madame_1.ply");
+    //process_file(file1, name1);
 
-    std::string filetest("D:/data/Area_4.ply");
-    std::string nametest("feature_area_4.ply");
-    process_file(filetest, nametest, false);
+    std::string file2("D:/data/rueMadame/GT_Madame1_3.ply");
+    std::string name2("madame_2.ply");
+    process_file(file2, name2);
     return 0;
 }
