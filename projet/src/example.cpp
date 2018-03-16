@@ -121,69 +121,199 @@ void local_pca(std::vector<Eigen::Vector3f>& pts, Eigen::Matrix3f& evec, Eigen::
 }
 
 enum Method { TIMO, LEMAN };
+const Method METHOD = TIMO;
 
-const int PCA_FEATURE_N = 6;
-typedef std::array<float, PCA_FEATURE_N> ShapeFeature;
+template <Method method>
+struct MethodTraits
+{
+    static const int SCALE_N;
+    static const int PCA_FEATURE_N;
+    static const int BALL_FEATURE_N;
+    using ShapeFeature = std::array<float, PCA_FEATURE_N>;
+
+    static const bool nb_of_nb;
+    static const bool use_knn; // k-NN or radius query
+    static const int k_for_knn; // k of k-NN
+
+
+    static std::vector<float> radii();
+    static std::vector<float> grid_size();
+    static ShapeFeature compute_features_with_eigen(
+        const Eigen::Vector3f& p, const std::vector<Eigen::Vector3f>& nbs,
+        const Eigen::Matrix3f& evec, const Eigen::Vector3f& evar, float radius);
+};
+
+
+
+template <>
+struct MethodTraits<LEMAN>
+{
+    static const int SCALE_N = 5;
+    static const int PCA_FEATURE_N = 6;
+    static const int BALL_FEATURE_N = PCA_FEATURE_N + 1;
+    using ShapeFeature = std::array<float, PCA_FEATURE_N>;
+
+    static const bool nb_of_nb = true;
+    static const bool use_knn = false;
+    static const int k_for_knn = 0; // k of k-NN
+
+    static std::vector<float> radii() {
+        return{ 0.25, 0.5, 1, 2, 4 };
+    }
+    static std::vector<float> grid_size() {
+        return{ 0.0125f, 0.025f, 0.05f, 0.1f, 0.2f };
+    }
+    static ShapeFeature compute_features_with_eigen(
+        const Eigen::Vector3f& p, const std::vector<Eigen::Vector3f>& nbs,
+        const Eigen::Matrix3f& evec, const Eigen::Vector3f& evar, float radius) {
+        float l1 = evar[2];
+        float l2 = evar[1];
+        float l3 = evar[0];
+        float denom = l1 + l2 + l3 + 1e-6f;
+        l1 /= denom;
+        l2 /= denom;
+        l3 /= denom;
+
+        Eigen::Vector3f normal = evec.col(0);
+        Eigen::Vector3f ez(0., 0., 1.);
+        float verticality = 2. * std::asin(std::min(std::abs(normal.dot(ez)), 1.0f)) / PI;
+
+        l1 += 1e-6f;
+        float linearity = 1. - l2 / l1;
+        float planarity = (l2 - l3) / l1;
+        float sphericity = l3 / l1;
+
+        const Eigen::Vector3f& v0 = evec.col(0);
+        const Eigen::Vector3f& v1 = evec.col(1);
+        const Eigen::Vector3f& v2 = evec.col(2);
+
+        float vertical_spreads =
+            v0[2] * v0[2] * evar[0] +
+            v1[2] * v1[2] * evar[1] +
+            v2[2] * v2[2] * evar[2];
+        vertical_spreads /= denom;
+        float total_spreads = denom / radius / radius;
+
+        if (!std::isfinite(vertical_spreads)) throw "error";
+        if (!std::isfinite(total_spreads)) throw "error";
+        if (!std::isfinite(verticality)) throw "error";
+        if (!std::isfinite(linearity)) throw "error";
+        if (!std::isfinite(planarity)) throw "error";
+        if (!std::isfinite(sphericity)) throw "error";
+
+        return{ vertical_spreads, total_spreads, verticality, linearity, planarity, sphericity };
+    }
+};
+
+template <>
+struct MethodTraits<TIMO>
+{
+    static const int SCALE_N = 9;
+    static const int PCA_FEATURE_N = 13;
+    static const int BALL_FEATURE_N = PCA_FEATURE_N;
+    using ShapeFeature = std::array<float, PCA_FEATURE_N>;
+
+    static const bool nb_of_nb = false;
+    static const bool use_knn = true;
+    static const int k_for_knn = 10; // k of k-NN
+
+    static std::vector<float> radii() {
+        return{ 0,0,0,0,0,0,0,0,0 };
+    }
+    static std::vector<float> grid_size() {
+        return{ 0.025f, 0.05f, 0.1f, 0.2f, 0.4f, 0.8f, 1.6f, 3.2f, 6.4f };
+    }
+    static ShapeFeature compute_features_with_eigen(
+        const Eigen::Vector3f& p, const std::vector<Eigen::Vector3f>& nbs,
+        const Eigen::Matrix3f& evec, const Eigen::Vector3f& evar, float radius) {
+        float l1 = evar[2];
+        float l2 = evar[1];
+        float l3 = evar[0];
+        l3 = std::max(0.f, l3);
+        float l_sum = l1 + l2 + l3 + 1e-6f;
+
+        l1 /= l_sum;
+        l2 /= l_sum;
+        l3 /= l_sum;
+
+        float eigen_entropy = -l1*std::log(l1) - l2*std::log(l2) - l3*std::log(l3+1e-6f);
+        float omnivariance = std::cbrt(l1*l2*l3);
+
+        Eigen::Vector3f normal = evec.col(0);
+        Eigen::Vector3f ez(0., 0., 1.);
+        float verticality = 1.0 - std::min(std::abs(normal.dot(ez)), 1.0f);
+
+        l1 += 1e-6f;
+        float anisotropy = (l1 - l3) / l1;
+        float surface_variation = l3 / (l1 + l2 + l3);
+        float linearity = 1. - l2 / l1;
+        float planarity = (l2 - l3) / l1;
+        float sphericity = l3 / l1;
+
+        Eigen::Vector3f e1 = evec.col(2);
+        Eigen::Vector3f e2 = evec.col(1);
+        float moment_1o_1a = 0.;
+        float moment_1o_2a = 0.;
+        float moment_2o_1a = 0.;
+        float moment_2o_2a = 0.;
+        for (const auto& pi : nbs) {
+            auto d = pi - p;
+            float m1 = d.dot(e1);
+            float m2 = d.dot(e2);
+            moment_1o_1a += m1;
+            moment_1o_2a += m2;
+            moment_2o_1a += m1*m1;
+            moment_2o_2a += m2*m2;
+        }
+
+        if (!std::isfinite(moment_1o_1a)) throw "error";
+        if (!std::isfinite(moment_1o_2a)) throw "error";
+        if (!std::isfinite(moment_2o_1a)) throw "error";
+        if (!std::isfinite(moment_2o_2a)) throw "error";
+        if (!std::isfinite(verticality)) throw "error";
+        if (!std::isfinite(linearity)) throw "error";
+        if (!std::isfinite(planarity)) throw "error";
+        if (!std::isfinite(sphericity)) throw "error";
+        if (!std::isfinite(eigen_entropy)) throw "error";
+        if (!std::isfinite(omnivariance)) throw "error";
+        if (!std::isfinite(anisotropy)) throw "error";
+        if (!std::isfinite(surface_variation)) throw "error";
+
+        return{ l_sum, omnivariance, eigen_entropy, anisotropy,
+            planarity, linearity, surface_variation, sphericity, verticality,
+            moment_1o_1a, moment_1o_2a, moment_2o_1a, moment_2o_2a };
+    }
+};
+
+
+
+
 struct FeatureReport
 {
     int nb_count;
-    ShapeFeature f;
+    MethodTraits<METHOD>::ShapeFeature f;
     Eigen::Matrix3f evec;
     Eigen::Vector3f evar;
 };
 
-ShapeFeature compute_features_with_eigen(
-    const Eigen::Vector3f& p, const std::vector<Eigen::Vector3f>& nbs,
-    const Eigen::Matrix3f& evec, const Eigen::Vector3f& evar, float radius) {
-    float l1 = evar[2];
-    float l2 = evar[1];
-    float l3 = evar[0];
-    float denom = l1 + l2 + l3 + 1e-6f;
-    l1 /= denom;
-    l2 /= denom;
-    l3 /= denom;
 
-    Eigen::Vector3f normal = evec.col(0);
-    Eigen::Vector3f ez(0., 0., 1.);
-    float verticality = 2. * std::asin(std::min(std::abs(normal.dot(ez)), 1.0f)) / PI;
-
-    l1 += 1e-6f;
-    float linearity = 1. - l2 / l1;
-    float planarity = (l2 - l3) / l1;
-    float sphericity = l3 / l1;
-
-    const Eigen::Vector3f& v0 = evec.col(0);
-    const Eigen::Vector3f& v1 = evec.col(1);
-    const Eigen::Vector3f& v2 = evec.col(2);
-
-    float vertical_spreads =
-        v0[2] * v0[2] * evar[0] +
-        v1[2] * v1[2] * evar[1] +
-        v2[2] * v2[2] * evar[2];
-    vertical_spreads /= denom;
-    float total_spreads = denom / radius / radius;
-
-    if (!std::isfinite(vertical_spreads)) throw "error";
-    if (!std::isfinite(total_spreads)) throw "error";
-    if (!std::isfinite(verticality)) throw "error";
-    if (!std::isfinite(linearity)) throw "error";
-    if (!std::isfinite(planarity)) throw "error";
-    if (!std::isfinite(sphericity)) throw "error";
-
-    return ShapeFeature{ vertical_spreads, total_spreads, verticality, linearity, planarity, sphericity };
-}
 
 void neighborhood_PCA_and_feature(
-    const Eigen::Vector3f& query, KdTree3D& tree, float radius, FeatureReport& feature_report) {
+    const Eigen::Vector3f& query, KdTree3D& tree, int k_for_knn, float radius, FeatureReport& feature_report) {
     std::vector<Eigen::Vector3f> nbs;
-    tree.query_radius(query, radius, nbs);
+    if (MethodTraits<METHOD>::use_knn) {
+        tree.query_k(query, k_for_knn, nbs);
+    }
+    else {
+        tree.query_radius(query, radius, nbs);
+    }
     feature_report.nb_count = nbs.size();
     local_pca(nbs, feature_report.evec, feature_report.evar);
     const Eigen::Matrix3f& evec = feature_report.evec;
     const Eigen::Vector3f& evar = feature_report.evar;
 
     //features 
-    feature_report.f = compute_features_with_eigen(query, nbs, evec, evar, radius);
+    feature_report.f = MethodTraits<METHOD>::compute_features_with_eigen(query, nbs, evec, evar, radius);
 }
 
 
@@ -192,14 +322,7 @@ void grid_subsample(const std::vector<Eigen::Vector3f>& pts, const std::vector<i
     std::vector<Eigen::Vector3f>& sub_pts, std::vector<int32_t>& sub_labels, float size) {
     sub_pts.clear();
     sub_labels.clear();
-    //Eigen::Vector3f max_corner(-1e100, -1e100, -1e100);
-    //Eigen::Vector3f min_corner(1e100, 1e100, 1e100);
-    //for (const auto& p : pts) {
-    //    for (int i = 0; i < 3; i++) {
-    //        max_corner[i] = std::max(max_corner[i], p[i]);
-    //        min_corner[i] = std::min(min_corner[i], p[i]);
-    //    }
-    //}
+
     typedef std::array<int, 3> Index;
     typedef int32_t label_t;
     std::map<Index, std::map<label_t, std::vector<Eigen::Vector3f> > > grids;
@@ -238,6 +361,9 @@ void process_file(const std::string& file, const std::string& output_name) {
     class_mapping[22] = 5;//Pedestrians
     class_mapping[24] = 5;//Pedestrians
 
+    std::random_device rd;
+    std::mt19937 g(rd());
+
     //read file
     const int max_sample_per_class = 3000;
     std::vector<Eigen::Vector3f> pts;
@@ -253,8 +379,7 @@ void process_file(const std::string& file, const std::string& output_name) {
     {
         ScopeTimer t("select pts per class", true, false);
 
-        std::random_device rd;
-        std::mt19937 g(rd());
+
         std::vector<int> indices(pts.size());
         std::iota(indices.begin(), indices.end(), 0);
         std::shuffle(indices.begin(), indices.end(), g);
@@ -284,11 +409,12 @@ void process_file(const std::string& file, const std::string& output_name) {
     }
 
     //parameters
-    std::vector<float> radii{ 0.25, 0.5, 1, 2, 4 };
-    std::vector<float> grid_size{ 0.0125f, 0.025f, 0.05f, 0.1f, 0.2f };
-    const int SCALE_NUMBER = radii.size();
-    const int BALL_NUMBER = 7;
-    const int FEATURE_N = BALL_NUMBER * (PCA_FEATURE_N + 1)*SCALE_NUMBER;
+    std::vector<float> radii = MethodTraits<METHOD>::radii();
+    std::vector<float> grid_size = MethodTraits<METHOD>::grid_size();
+    const int PCA_FEATURE_N = MethodTraits<METHOD>::PCA_FEATURE_N;
+    const int SCALE_NUMBER = MethodTraits<METHOD>::SCALE_N;
+    const int BALL_NUMBER = MethodTraits<METHOD>::nb_of_nb ? 7 : 1;
+    const int FEATURE_N = BALL_NUMBER * MethodTraits<METHOD>::BALL_FEATURE_N * SCALE_NUMBER;
     const float offset_coeff = 1.0;
     std::vector<Eigen::Vector3f> offsets = { {-1,0,0},{1,0,0},{0,1,0}, {0,-1,0}, {0,0,1}, {0,0,-1} };
     for (auto& offset : offsets) offset *= offset_coeff;
@@ -306,12 +432,12 @@ void process_file(const std::string& file, const std::string& output_name) {
     {
         ScopeTimer t("build tree", true, false);
         std::cout << pts.size() << " points in total" << std::endl;
-        for (int k = 0; k < SCALE_NUMBER; k++) {
+        for (int scale = 0; scale < SCALE_NUMBER; scale++) {
             trees.push_back(std::make_unique<KdTree3D>());
             std::vector<Eigen::Vector3f> sub_pts;
             std::vector<int32_t> sub_labels;
-            grid_subsample(pts, labels, sub_pts, sub_labels, grid_size[k]);
-            std::cout << sub_pts.size() << " points for scale " << radii[k] << std::endl;
+            grid_subsample(pts, labels, sub_pts, sub_labels, grid_size[scale]);
+            std::cout << sub_pts.size() << " points for scale " << scale << std::endl;
             trees.back()->set_points(sub_pts);
         }
     }
@@ -332,48 +458,60 @@ void process_file(const std::string& file, const std::string& output_name) {
         float* f = &features[i*FEATURE_N];
         float* f_one = &features_one[i * PCA_FEATURE_N];
 
-        for (int k = 0; k < radii.size(); k++) {
-            float radius = radii[k];
+        for (int scale = 0; scale < SCALE_NUMBER; scale++) {
+            float radius = radii[scale];
             FeatureReport fr;
-            neighborhood_PCA_and_feature(p, *trees[k], radius, fr);
+            neighborhood_PCA_and_feature(p, *trees[scale], MethodTraits<METHOD>::k_for_knn, radius, fr);
             int nb_count = fr.nb_count;
             if (nb_count == 0) nb_count = 1;
-            float density_ratio = 1.;
-            *f++ = density_ratio;
+            if (MethodTraits<METHOD>::use_knn) {
+                float density_ratio = 1.;
+                *f++ = density_ratio;
+            }
             for (int s = 0; s < PCA_FEATURE_N; s++)
                 *f++ = fr.f[s];
-            if (k == 1) {
+            if (scale == 3) {
                 for (int s = 0; s < PCA_FEATURE_N; s++)
                     *f_one++ = fr.f[s];
             }
-            Eigen::Vector3f normal = fr.evec.col(0);
-            Eigen::Vector3f direction1 = fr.evec.col(2);
-            Eigen::Vector3f direction2 = fr.evec.col(1);
 
-            if (normal[2] < 0) normal = -normal;
-            if (direction1[2] < 0) direction1 = -direction1;
-            if (direction2[2] < 0) direction2 = -direction2;
+            if (MethodTraits<METHOD>::nb_of_nb) {
+                Eigen::Vector3f normal = fr.evec.col(0);
+                Eigen::Vector3f direction1 = fr.evec.col(2);
+                Eigen::Vector3f direction2 = fr.evec.col(1);
 
-            //Eigen::Vector3f normal_xy = normal;
-            //normal_xy[2] = 0.;
-            //normal_xy.normalize();
-            //Eigen::Vector3f left(-normal_xy[1], normal_xy[0], 0.);
-            //Eigen::Vector3f up(0., 0., 1.);
-            //std::uniform_real_distribution<> dis(0., 1.);
-            //if (dis(g) > 0.5) {
-            //    left *= -1.;
-            //}
+                if (normal[2] < 0) normal = -normal;
+                if (direction1[2] < 0) direction1 = -direction1;
+                if (direction2[2] < 0) direction2 = -direction2;
 
-            //std::vector<Eigen::Vector3f> offsets = { normal,-normal,direction1,-direction1,direction2,-direction2 };
-            std::vector<Eigen::Vector3f> axis = { normal, direction1,direction2 };
-            for (auto& offset : offsets) {
-                FeatureReport fr_off;
-                auto offset_direction = offset[0] * axis[0] + offset[1] * axis[1] + offset[2] * axis[2];
-                neighborhood_PCA_and_feature(p + radius * offset_direction, *trees[k], radius, fr_off);
-                float density_ratio = float(fr_off.nb_count) / nb_count;
-                *f++ = density_ratio;
-                for (int s = 0; s < PCA_FEATURE_N; s++)
-                    *f++ = fr_off.f[s];
+
+                std::vector<Eigen::Vector3f> axis = { normal, direction1, direction2 };
+                bool flat = false;
+                if (flat) {
+                    Eigen::Vector3f normal_xy = normal;
+                    normal_xy[2] = 0.;
+                    normal_xy.normalize();
+                    Eigen::Vector3f left(-normal_xy[1], normal_xy[0], 0.);
+                    Eigen::Vector3f up(0., 0., 1.);
+                    std::uniform_real_distribution<> dis(0., 1.);
+                    if (dis(g) > 0.5) {
+                        left *= -1.;
+                    }
+                    axis = { normal_xy, left, up };
+                }
+
+                for (auto& offset : offsets) {
+                    FeatureReport fr_off;
+                    auto offset_direction = offset[0] * axis[0] + offset[1] * axis[1] + offset[2] * axis[2];
+                    neighborhood_PCA_and_feature(p + radius * offset_direction, *trees[scale], MethodTraits<METHOD>::k_for_knn, radius, fr_off);
+                    if (MethodTraits<METHOD>::use_knn) {
+                        float density_ratio = float(fr_off.nb_count) / nb_count;
+                        *f++ = density_ratio;
+                    }
+
+                    for (int s = 0; s < PCA_FEATURE_N; s++)
+                        *f++ = fr_off.f[s];
+                }
             }
         }
     }
@@ -404,8 +542,14 @@ void process_file(const std::string& file, const std::string& output_name) {
             reinterpret_cast<uint8_t*>(pts_select.data()), tinyply::Type::INVALID, 0);
         out2_file.add_properties_to_element("feature", { "label" }, tinyply::Type::UINT32, labels_select.size(),
             reinterpret_cast<uint8_t*>(labels_select.data()), tinyply::Type::INVALID, 0);
-        out2_file.add_properties_to_element("vertex", { "vertical_spreads", "total_spreads", "verticality", "linearity", "planarity", "sphericity" },
-            tinyply::Type::FLOAT32, features_one.size(), reinterpret_cast<uint8_t*>(features_one.data()), tinyply::Type::INVALID, 0);
+        if (METHOD == TIMO)
+            out2_file.add_properties_to_element("vertex", { "l_sum", "omnivariance", "eigen_entropy", "anisotropy",
+                "planarity", "linearity", "surface_variation", "sphericity", "verticality",
+                "moment_1o_1a", "moment_1o_2a", "moment_2o_1a", "moment_2o_2a" },
+                tinyply::Type::FLOAT32, features_one.size(), reinterpret_cast<uint8_t*>(features_one.data()), tinyply::Type::INVALID, 0);
+        if (METHOD == LEMAN)
+            out2_file.add_properties_to_element("vertex", { "vertical_spreads", "total_spreads", "verticality", "linearity", "planarity", "sphericity" },
+                tinyply::Type::FLOAT32, features_one.size(), reinterpret_cast<uint8_t*>(features_one.data()), tinyply::Type::INVALID, 0);
         out2_file.write(out2, binary);
         out2.close();
     }
@@ -415,9 +559,13 @@ void process_file(const std::string& file, const std::string& output_name) {
 
 int main(int argc, char *argv[])
 {
-    //std::string file1("D:/data/rueMadame/GT_Madame1_2.ply");
-    //std::string name1("madame_1.ply");
+    //std::string file1("D:/data/MiniChallenge/Lille_street_1.ply");
+    //std::string name1("Lille_street_1.ply");
     //process_file(file1, name1);
+
+    std::string file1("D:/data/rueMadame/GT_Madame1_2.ply");
+    std::string name1("madame_1.ply");
+    process_file(file1, name1);
 
     std::string file2("D:/data/rueMadame/GT_Madame1_3.ply");
     std::string name2("madame_2.ply");

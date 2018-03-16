@@ -74,12 +74,15 @@ public:
         kdtree->buildIndex();
     }
 
-    int query(Eigen::Vector3f p) const {
+    void query_k(Eigen::Vector3f p, int k, std::vector<Eigen::Vector3f>& points) const {
         size_t num_results = 1;
-        size_t ret_index;
-        float out_dist_sqr;
-        kdtree->knnSearch(&p[0], num_results, &ret_index, &out_dist_sqr);
-        return int(ret_index);
+        std::vector<size_t> ret_index(k);
+        std::vector<float> out_dist_sqr(k);
+        kdtree->knnSearch(&p[0], k, ret_index.data(), out_dist_sqr.data());
+        points.clear();
+        for (const auto& r : ret_index) {
+            points.push_back(points_adaptor->derived()[r]);
+        }
     }
 
     void query_radius(Eigen::Vector3f p, float radius, std::vector<Eigen::Vector3f>& points) const {
