@@ -120,26 +120,21 @@ void local_pca(std::vector<Eigen::Vector3f>& pts, Eigen::Matrix3f& evec, Eigen::
     evar = es.eigenvalues();
 }
 
-std::pair<Eigen::Matrix3f, Eigen::Vector3f> neighborhood_PCA(
-    const Eigen::Vector3f& query, KdTree3D& tree, float radius, int& nb_count) {
-    std::vector<Eigen::Vector3f> nbs;
-    tree.query_radius(query, radius, nbs);
-    const int N = nbs.size();
-    nb_count = N;
-    Eigen::Matrix3f evec;
-    Eigen::Vector3f evar;
-    local_pca(nbs, evec, evar);
-    return std::make_pair(evec, evar);
-}
+enum Method { TIMO, LEMAN };
 
 const int PCA_FEATURE_N = 6;
 typedef std::array<float, PCA_FEATURE_N> ShapeFeature;
-ShapeFeature compute_features_with_eigen(const std::pair<Eigen::Matrix3f, Eigen::Vector3f>& eigens, float radius) {
+struct FeatureReport
+{
+    int nb_count;
+    ShapeFeature f;
+    Eigen::Matrix3f evec;
+    Eigen::Vector3f evar;
+};
 
-
-    const Eigen::Matrix3f& evec = eigens.first;
-    const Eigen::Vector3f& evar = eigens.second;
-
+ShapeFeature compute_features_with_eigen(
+    const Eigen::Vector3f& p, const std::vector<Eigen::Vector3f>& nbs,
+    const Eigen::Matrix3f& evec, const Eigen::Vector3f& evar, float radius) {
     float l1 = evar[2];
     float l2 = evar[1];
     float l3 = evar[0];
@@ -177,6 +172,21 @@ ShapeFeature compute_features_with_eigen(const std::pair<Eigen::Matrix3f, Eigen:
 
     return ShapeFeature{ vertical_spreads, total_spreads, verticality, linearity, planarity, sphericity };
 }
+
+void neighborhood_PCA_and_feature(
+    const Eigen::Vector3f& query, KdTree3D& tree, float radius, FeatureReport& feature_report) {
+    std::vector<Eigen::Vector3f> nbs;
+    tree.query_radius(query, radius, nbs);
+    feature_report.nb_count = nbs.size();
+    local_pca(nbs, feature_report.evec, feature_report.evar);
+    const Eigen::Matrix3f& evec = feature_report.evec;
+    const Eigen::Vector3f& evar = feature_report.evar;
+
+    //features 
+    feature_report.f = compute_features_with_eigen(query, nbs, evec, evar, radius);
+}
+
+
 
 void grid_subsample(const std::vector<Eigen::Vector3f>& pts, const std::vector<int32_t>& labels,
     std::vector<Eigen::Vector3f>& sub_pts, std::vector<int32_t>& sub_labels, float size) {
@@ -324,22 +334,21 @@ void process_file(const std::string& file, const std::string& output_name) {
 
         for (int k = 0; k < radii.size(); k++) {
             float radius = radii[k];
-            int nb_count;
-            const auto eigen_pair = neighborhood_PCA(p, *trees[k], radius, nb_count);
+            FeatureReport fr;
+            neighborhood_PCA_and_feature(p, *trees[k], radius, fr);
+            int nb_count = fr.nb_count;
             if (nb_count == 0) nb_count = 1;
-            ShapeFeature sf = compute_features_with_eigen(eigen_pair, radius);
             float density_ratio = 1.;
             *f++ = density_ratio;
             for (int s = 0; s < PCA_FEATURE_N; s++)
-                *f++ = sf[s];
+                *f++ = fr.f[s];
             if (k == 1) {
                 for (int s = 0; s < PCA_FEATURE_N; s++)
-                    *f_one++ = sf[s];
+                    *f_one++ = fr.f[s];
             }
-            const Eigen::Matrix3f& evec = eigen_pair.first;
-            Eigen::Vector3f normal = evec.col(0);
-            Eigen::Vector3f direction1 = evec.col(2);
-            Eigen::Vector3f direction2 = evec.col(1);
+            Eigen::Vector3f normal = fr.evec.col(0);
+            Eigen::Vector3f direction1 = fr.evec.col(2);
+            Eigen::Vector3f direction2 = fr.evec.col(1);
 
             if (normal[2] < 0) normal = -normal;
             if (direction1[2] < 0) direction1 = -direction1;
@@ -358,14 +367,13 @@ void process_file(const std::string& file, const std::string& output_name) {
             //std::vector<Eigen::Vector3f> offsets = { normal,-normal,direction1,-direction1,direction2,-direction2 };
             std::vector<Eigen::Vector3f> axis = { normal, direction1,direction2 };
             for (auto& offset : offsets) {
-                int nb_count_offset;
+                FeatureReport fr_off;
                 auto offset_direction = offset[0] * axis[0] + offset[1] * axis[1] + offset[2] * axis[2];
-                const auto eigens = neighborhood_PCA(p + radius * offset_direction, *trees[k], radius, nb_count_offset);
-                ShapeFeature sf = compute_features_with_eigen(eigens, radius);
-                float density_ratio = float(nb_count_offset) / nb_count;
+                neighborhood_PCA_and_feature(p + radius * offset_direction, *trees[k], radius, fr_off);
+                float density_ratio = float(fr_off.nb_count) / nb_count;
                 *f++ = density_ratio;
                 for (int s = 0; s < PCA_FEATURE_N; s++)
-                    *f++ = sf[s];
+                    *f++ = fr_off.f[s];
             }
         }
     }
