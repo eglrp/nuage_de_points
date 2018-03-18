@@ -13,6 +13,8 @@
 #include <array>
 #include <map>
 #include "scope_timer.h"
+#include <set>
+#include <omp.h>
 typedef std::chrono::time_point<std::chrono::high_resolution_clock> timepoint;
 
 inline std::chrono::time_point<std::chrono::high_resolution_clock> now()
@@ -62,7 +64,7 @@ void read_point_cloud(const std::string & filename, std::vector<Eigen::Vector3f>
 
     // Tinyply 2.0 treats incoming data as untyped byte buffers. It's now
     // up to users to treat this data as they wish. See below for examples.
-    std::shared_ptr<tinyply::PlyData> vertices, labels;
+    std::shared_ptr<tinyply::PlyData> vertices, classes;
 
     // The header information can be used to programmatically extract properties on elements
     // known to exist in the file header prior to reading the data. For brevity of this sample, properties 
@@ -70,8 +72,16 @@ void read_point_cloud(const std::string & filename, std::vector<Eigen::Vector3f>
     try { vertices = file.request_properties_from_element("vertex", { "x", "y", "z" }); }
     catch (const std::exception & e) { std::cerr << "tinyply exception: " << e.what() << std::endl; }
 
-    try { labels = file.request_properties_from_element("vertex", { "class" }); }
-    catch (const std::exception & e) { std::cerr << "tinyply exception: " << e.what() << std::endl; }
+    try { classes = file.request_properties_from_element("vertex", { "class" }); }
+    catch (const std::exception & e) {
+        std::cerr << "tinyply exception: " << e.what() << std::endl;
+        std::cout << "load property 'scalar_class' as class instead.." << std::endl;
+        try { classes = file.request_properties_from_element("vertex", { "scalar_class" }); }
+        catch (const std::exception & e) {
+            std::cerr << "tinyply exception: " << e.what() << std::endl;
+            exit(1);
+        }
+    }
 
 
     timepoint before = now();
@@ -81,16 +91,30 @@ void read_point_cloud(const std::string & filename, std::vector<Eigen::Vector3f>
     // Good place to put a breakpoint!
     std::cout << "Parsing took " << difference_millis(before, after) << " ms: " << std::endl;
     if (vertices) std::cout << "\tRead " << vertices->count << " total vertices " << std::endl;
-    if (labels) std::cout << "\tRead " << labels->count << " total labels " << std::endl;
+    if (classes) std::cout << "\tRead " << classes->count << " total labels " << std::endl;
 
     const size_t numVerticesBytes = vertices->buffer.size_bytes();
     verts.resize(vertices->count);
     std::memcpy(verts.data(), vertices->buffer.get(), numVerticesBytes);
-
-    const size_t numLablesBytes = labels->buffer.size_bytes();
-    ls.resize(labels->count);
-    std::memcpy(ls.data(), labels->buffer.get(), numLablesBytes);
-
+    {
+        const size_t numLablesBytes = classes->buffer.size_bytes();
+        ls.resize(classes->count);
+        if (classes->t == tinyply::Type::UINT32 || classes->t == tinyply::Type::INT32) {
+            std::memcpy(ls.data(), classes->buffer.get(), numLablesBytes);
+        }
+        else if (classes->t == tinyply::Type::FLOAT32) {
+            std::cout << "convert float class to uint32" << std::endl;
+            std::vector<float> float_classes(classes->count);
+            std::memcpy(float_classes.data(), classes->buffer.get(), numLablesBytes);
+            for (int i = 0; i < classes->count; i++) {
+                ls[i] = int32_t(float_classes[i]);
+            }
+        }
+        else {
+            std::cout << "unacceptable class type" << std::endl;
+            exit(1);
+        }
+    }
 }
 
 void local_pca(std::vector<Eigen::Vector3f>& pts, Eigen::Matrix3f& evec, Eigen::Vector3f& evar) {
@@ -120,8 +144,8 @@ void local_pca(std::vector<Eigen::Vector3f>& pts, Eigen::Matrix3f& evec, Eigen::
     evar = es.eigenvalues();
 }
 
-enum Method { TIMO, LEMAN };
-const Method METHOD = TIMO;
+enum Method { TIMO, LEMAN, LEMAN_2 };
+const Method METHOD = LEMAN_2;
 
 template <Method method>
 struct MethodTraits
@@ -148,7 +172,7 @@ struct MethodTraits
 template <>
 struct MethodTraits<LEMAN>
 {
-    static const int SCALE_N = 5;
+    static const int SCALE_N = 4;
     static const int PCA_FEATURE_N = 6;
     static const int BALL_FEATURE_N = PCA_FEATURE_N + 1;
     using ShapeFeature = std::array<float, PCA_FEATURE_N>;
@@ -158,10 +182,10 @@ struct MethodTraits<LEMAN>
     static const int k_for_knn = 0; // k of k-NN
 
     static std::vector<float> radii() {
-        return{ 0.25, 0.5, 1, 2, 4 };
+        return{ 0.1f, 0.3f, 0.9f, 2.7f };
     }
     static std::vector<float> grid_size() {
-        return{ 0.0125f, 0.025f, 0.05f, 0.1f, 0.2f };
+        return{ 0.025f, 0.075f, 0.225f, 0.675f };
     }
     static ShapeFeature compute_features_with_eigen(
         const Eigen::Vector3f& p, const std::vector<Eigen::Vector3f>& nbs,
@@ -206,6 +230,47 @@ struct MethodTraits<LEMAN>
 };
 
 template <>
+struct MethodTraits<LEMAN_2>
+{
+    static const int SCALE_N = 4;
+    static const int PCA_FEATURE_N = 5;
+    static const int BALL_FEATURE_N = PCA_FEATURE_N + 1;
+    using ShapeFeature = std::array<float, PCA_FEATURE_N>;
+
+    static const bool nb_of_nb = true;
+    static const bool use_knn = false;
+    static const int k_for_knn = 0; // k of k-NN
+
+    static std::vector<float> radii() {
+        return{ 0.1f, 0.3f, 0.9f, 2.7f };
+    }
+    static std::vector<float> grid_size() {
+        return{ 0.025f, 0.075f, 0.225f, 0.675f };
+    }
+    static ShapeFeature compute_features_with_eigen(
+        const Eigen::Vector3f& p, const std::vector<Eigen::Vector3f>& nbs,
+        const Eigen::Matrix3f& evec, const Eigen::Vector3f& evar, float radius) {
+        float l1 = evar[2];
+        float l2 = evar[1];
+        float l3 = evar[0];
+        float denom = l1 + l2 + l3 + 1e-6f;
+        l1 /= denom;
+        l2 /= denom;
+        l3 /= denom;
+
+        Eigen::Vector3f normal = evec.col(0);
+        Eigen::Vector3f ez(0., 0., 1.);
+        float verticality = 2. * std::asin(std::min(std::abs(normal.dot(ez)), 1.0f)) / PI;
+        float total_spreads = denom / radius / radius;
+
+        if (!std::isfinite(total_spreads)) throw "error";
+        if (!std::isfinite(verticality)) throw "error";
+
+        return{ total_spreads, l1, l2, l3, verticality };
+    }
+};
+
+template <>
 struct MethodTraits<TIMO>
 {
     static const int SCALE_N = 9;
@@ -236,7 +301,7 @@ struct MethodTraits<TIMO>
         l2 /= l_sum;
         l3 /= l_sum;
 
-        float eigen_entropy = -l1*std::log(l1) - l2*std::log(l2) - l3*std::log(l3+1e-6f);
+        float eigen_entropy = -l1*std::log(l1) - l2*std::log(l2) - l3*std::log(l3 + 1e-6f);
         float omnivariance = std::cbrt(l1*l2*l3);
 
         Eigen::Vector3f normal = evec.col(0);
@@ -319,62 +384,55 @@ void neighborhood_PCA_and_feature(
 
 
 void grid_subsample(const std::vector<Eigen::Vector3f>& pts, const std::vector<int32_t>& labels,
-    std::vector<Eigen::Vector3f>& sub_pts, std::vector<int32_t>& sub_labels, float size) {
+    std::vector<Eigen::Vector3f>& sub_pts, std::vector<int32_t>& sub_labels, float size, int class_number) {
     sub_pts.clear();
     sub_labels.clear();
 
     typedef std::array<int, 3> Index;
     typedef int32_t label_t;
-    std::map<Index, std::map<label_t, std::vector<Eigen::Vector3f> > > grids;
-    for (int a = 0; a < pts.size(); a++) {
-        Eigen::Vector3f ijk = (pts[a] / size).array().floor();
-        int i = ijk[0], j = ijk[1], k = ijk[2];
-        grids[{i, j, k}][labels[a]].push_back(pts[a]);
-    }
-    for (auto& it : grids) {
-        const auto& points_by_classes = it.second;
-        for (auto& itc : points_by_classes) {
-            label_t cls = itc.first;
-            const std::vector<Eigen::Vector3f>& points = itc.second;
-            Eigen::Vector3f s(0.f, 0.f, 0.f);
-            for (const auto& p : points)
-                s += p;
-            s /= points.size();
-            sub_pts.push_back(s);
-            sub_labels.push_back(cls);
+    std::vector<std::map<Index, std::vector<Eigen::Vector3f> > >  grids(class_number);
+    {
+        ScopeTimer t("Assigning grids");
+        for (int a = 0; a < pts.size(); a++) {
+            Eigen::Vector3f ijk = (pts[a] / size).array().floor();
+            int i = ijk[0], j = ijk[1], k = ijk[2];
+            grids[labels[a]][{i, j, k}].push_back(pts[a]);
         }
+    }
+    {
+        ScopeTimer t("merge grids");
+        for (int c = 0; c < class_number; c++)
+            for (auto& it : grids[c]) {
+                const auto& points = it.second;
+                Eigen::Vector3f s(0.f, 0.f, 0.f);
+                for (const auto& p : points)
+                    s += p;
+                s /= points.size();
+                sub_pts.push_back(s);
+                sub_labels.push_back(c);
+            }
     }
 }
 
 //#pragma optimize( "", off )  
 
 void process_file(const std::string& file, const std::string& output_name) {
-    const int RAW_CLASS_NUMBER = 27;
-    const int CLASS_NUMBER = 6;
-    std::vector<int> class_mapping(RAW_CLASS_NUMBER, -1);
-    class_mapping[1] = 0;//Facade
-    class_mapping[2] = 1;//Ground
-    class_mapping[4] = 2;//Cars
-    class_mapping[10] = 3;//Moto
-    class_mapping[14] = 4;//Traffic signs
-    class_mapping[9] = 5;//Pedestrians
-    class_mapping[22] = 5;//Pedestrians
-    class_mapping[24] = 5;//Pedestrians
+    const int CLASS_NUMBER = 12;
 
     std::random_device rd;
     std::mt19937 g(rd());
 
     //read file
-    const int max_sample_per_class = 3000;
+    const int max_sample_per_class = 10000;
     std::vector<Eigen::Vector3f> pts;
-    std::vector<int32_t> labels;
+    std::vector<int32_t> classes;
     {
         ScopeTimer t("read file", true, false);
-        read_point_cloud(file, pts, labels);
+        read_point_cloud(file, pts, classes);
     }
 
     //select points
-    std::vector<int> labels_select;
+    std::vector<int> classes_select;
     std::vector<Eigen::Vector3f> pts_select;
     {
         ScopeTimer t("select pts per class", true, false);
@@ -384,21 +442,23 @@ void process_file(const std::string& file, const std::string& output_name) {
         std::iota(indices.begin(), indices.end(), 0);
         std::shuffle(indices.begin(), indices.end(), g);
 
-        labels_select.reserve(pts.size());
+        classes_select.reserve(pts.size());
         std::vector<int> class_count(CLASS_NUMBER, 0);
         pts_select.reserve(pts.size());
         for (int i : indices) {
-            int label = class_mapping[labels[i]];
-            if (label == -1) continue;
-            if (label >= CLASS_NUMBER) {
-                std::cout << "wrong class number : " << label << std::endl;
+            int class_ = classes[i];
+            if (class_ == 0) {
+                continue; // unclassified point
+            }
+            if (class_ >= CLASS_NUMBER || class_ < 0) {
+                std::cout << "wrong class number : " << class_ << std::endl;
                 exit(1);
             }
-            if (class_count[label] >= max_sample_per_class)
+            if (class_count[class_] >= max_sample_per_class)
                 continue;
 
-            class_count[label]++;
-            labels_select.push_back(label);
+            class_count[class_]++;
+            classes_select.push_back(class_);
             pts_select.push_back(pts[i]);
         }
         std::cout << pts_select.size() << " points selected for features : " << std::endl;
@@ -415,7 +475,7 @@ void process_file(const std::string& file, const std::string& output_name) {
     const int SCALE_NUMBER = MethodTraits<METHOD>::SCALE_N;
     const int BALL_NUMBER = MethodTraits<METHOD>::nb_of_nb ? 7 : 1;
     const int FEATURE_N = BALL_NUMBER * MethodTraits<METHOD>::BALL_FEATURE_N * SCALE_NUMBER;
-    const float offset_coeff = 1.0;
+    const float offset_coeff = 1.5;
     std::vector<Eigen::Vector3f> offsets = { {-1,0,0},{1,0,0},{0,1,0}, {0,-1,0}, {0,0,1}, {0,0,-1} };
     for (auto& offset : offsets) offset *= offset_coeff;
     //for (int i : {-1, 0, 1})
@@ -436,9 +496,13 @@ void process_file(const std::string& file, const std::string& output_name) {
             trees.push_back(std::make_unique<KdTree3D>());
             std::vector<Eigen::Vector3f> sub_pts;
             std::vector<int32_t> sub_labels;
-            grid_subsample(pts, labels, sub_pts, sub_labels, grid_size[scale]);
+            grid_subsample(pts, classes, sub_pts, sub_labels, grid_size[scale], CLASS_NUMBER);
             std::cout << sub_pts.size() << " points for scale " << scale << std::endl;
-            trees.back()->set_points(sub_pts);
+
+            {
+                ScopeTimer t("build tree");
+                trees.back()->set_points(sub_pts);
+            }
         }
     }
 
@@ -446,129 +510,260 @@ void process_file(const std::string& file, const std::string& output_name) {
     std::vector<float> features(pts_select.size() * FEATURE_N);
     std::vector<float> features_one(pts_select.size() * PCA_FEATURE_N);
 
-    std::cout << "Features calculation ..." << std::endl;
-    timepoint before = now();
-
-
-
+    {
+        ScopeTimer t("Features calculation", true, false);
+        int points_in_ball[SCALE_NUMBER] = { 0 };
+        int balls_n[SCALE_NUMBER] = { 0 };
 #pragma omp parallel for  
-    for (int i = 0; i < pts_select.size(); i++) {
-        auto& p = pts_select[i];
+        for (int i = 0; i < pts_select.size(); i++) {
+            auto& p = pts_select[i];
 
-        float* f = &features[i*FEATURE_N];
-        float* f_one = &features_one[i * PCA_FEATURE_N];
+            float* f = &features[i*FEATURE_N];
+            float* f_one = &features_one[i * PCA_FEATURE_N];
 
-        for (int scale = 0; scale < SCALE_NUMBER; scale++) {
-            float radius = radii[scale];
-            FeatureReport fr;
-            neighborhood_PCA_and_feature(p, *trees[scale], MethodTraits<METHOD>::k_for_knn, radius, fr);
-            int nb_count = fr.nb_count;
-            if (nb_count == 0) nb_count = 1;
-            if (MethodTraits<METHOD>::use_knn) {
-                float density_ratio = 1.;
-                *f++ = density_ratio;
-            }
-            for (int s = 0; s < PCA_FEATURE_N; s++)
-                *f++ = fr.f[s];
-            if (scale == 3) {
+            for (int scale = 0; scale < SCALE_NUMBER; scale++) {
+                float radius = radii[scale];
+                FeatureReport fr;
+                neighborhood_PCA_and_feature(p, *trees[scale], MethodTraits<METHOD>::k_for_knn, radius, fr);
+                int nb_count = fr.nb_count;
+                points_in_ball[scale] += nb_count;
+                balls_n[scale]++;
+                if (nb_count == 0) nb_count = 1;
+                if (!MethodTraits<METHOD>::use_knn) {
+                    float density_ratio = 1.;
+                    *f++ = density_ratio;
+                }
                 for (int s = 0; s < PCA_FEATURE_N; s++)
-                    *f_one++ = fr.f[s];
-            }
-
-            if (MethodTraits<METHOD>::nb_of_nb) {
-                Eigen::Vector3f normal = fr.evec.col(0);
-                Eigen::Vector3f direction1 = fr.evec.col(2);
-                Eigen::Vector3f direction2 = fr.evec.col(1);
-
-                if (normal[2] < 0) normal = -normal;
-                if (direction1[2] < 0) direction1 = -direction1;
-                if (direction2[2] < 0) direction2 = -direction2;
-
-
-                std::vector<Eigen::Vector3f> axis = { normal, direction1, direction2 };
-                bool flat = false;
-                if (flat) {
-                    Eigen::Vector3f normal_xy = normal;
-                    normal_xy[2] = 0.;
-                    normal_xy.normalize();
-                    Eigen::Vector3f left(-normal_xy[1], normal_xy[0], 0.);
-                    Eigen::Vector3f up(0., 0., 1.);
-                    std::uniform_real_distribution<> dis(0., 1.);
-                    if (dis(g) > 0.5) {
-                        left *= -1.;
-                    }
-                    axis = { normal_xy, left, up };
-                }
-
-                for (auto& offset : offsets) {
-                    FeatureReport fr_off;
-                    auto offset_direction = offset[0] * axis[0] + offset[1] * axis[1] + offset[2] * axis[2];
-                    neighborhood_PCA_and_feature(p + radius * offset_direction, *trees[scale], MethodTraits<METHOD>::k_for_knn, radius, fr_off);
-                    if (MethodTraits<METHOD>::use_knn) {
-                        float density_ratio = float(fr_off.nb_count) / nb_count;
-                        *f++ = density_ratio;
-                    }
-
+                    *f++ = fr.f[s];
+                if (scale == 3) {
                     for (int s = 0; s < PCA_FEATURE_N; s++)
-                        *f++ = fr_off.f[s];
+                        *f_one++ = fr.f[s];
+                }
+
+                if (MethodTraits<METHOD>::nb_of_nb) {
+                    Eigen::Vector3f normal = fr.evec.col(0);
+                    Eigen::Vector3f direction1 = fr.evec.col(2);
+                    Eigen::Vector3f direction2 = fr.evec.col(1);
+
+                    if (normal[2] < 0) normal = -normal;
+                    if (direction1[2] < 0) direction1 = -direction1;
+                    if (direction2[2] < 0) direction2 = -direction2;
+
+
+                    std::vector<Eigen::Vector3f> axis = { normal, direction1, direction2 };
+                    bool flat = false;
+                    if (flat) {
+                        Eigen::Vector3f normal_xy = normal;
+                        normal_xy[2] = 0.;
+                        normal_xy.normalize();
+                        Eigen::Vector3f left(-normal_xy[1], normal_xy[0], 0.);
+                        Eigen::Vector3f up(0., 0., 1.);
+                        std::uniform_real_distribution<> dis(0., 1.);
+                        if (dis(g) > 0.5) {
+                            left *= -1.;
+                        }
+                        axis = { normal_xy, left, up };
+                    }
+
+                    for (auto& offset : offsets) {
+                        FeatureReport fr_off;
+                        auto offset_direction = offset[0] * axis[0] + offset[1] * axis[1] + offset[2] * axis[2];
+                        neighborhood_PCA_and_feature(p + radius * offset_direction, *trees[scale], MethodTraits<METHOD>::k_for_knn, radius, fr_off);
+                        if (!MethodTraits<METHOD>::use_knn) {
+                            float density_ratio = float(fr_off.nb_count) / nb_count;
+                            *f++ = density_ratio;
+                        }
+
+                        for (int s = 0; s < PCA_FEATURE_N; s++)
+                            *f++ = fr_off.f[s];
+                    }
                 }
             }
+
+
+        }
+        std::cout << "averaged points in ball for scales :" << std::endl;
+        for (int i = 0; i < SCALE_NUMBER; i++) {
+            std::cout << "scale " << i << " " << double(points_in_ball[i]) / balls_n[i] << std::endl;
         }
     }
 
-    timepoint after = now();
-
-    std::cout << "...Done " << difference_second(before, after) << " s: " << std::endl;
-
-
-    bool binary = true;
-    std::ofstream out(output_name, binary ? std::ios::binary : 0);
-    tinyply::PlyFile out_file;
-
     {
-        out_file.add_properties_to_element("feature", { "label" }, tinyply::Type::UINT32, labels_select.size(),
-            reinterpret_cast<uint8_t*>(labels_select.data()), tinyply::Type::INVALID, 0);
+        ScopeTimer t("Write to file", true, false);
 
-        out_file.add_properties_to_element("feature", { "entries" }, tinyply::Type::FLOAT32, features.size(),
-            reinterpret_cast<uint8_t*>(features.data()), tinyply::Type::UINT32, FEATURE_N);
-        out_file.write(out, binary);
-        out.close();
-    }
-    {
-        std::ofstream out2(std::string("check_") + output_name, binary ? std::ios::binary : 0);
-        tinyply::PlyFile out2_file;
+        bool binary = true;
+        std::ofstream out(output_name, binary ? std::ios::binary : 0);
+        tinyply::PlyFile out_file;
 
-        out2_file.add_properties_to_element("vertex", { "x", "y", "z" }, tinyply::Type::FLOAT32, pts_select.size() * 3,
-            reinterpret_cast<uint8_t*>(pts_select.data()), tinyply::Type::INVALID, 0);
-        out2_file.add_properties_to_element("feature", { "label" }, tinyply::Type::UINT32, labels_select.size(),
-            reinterpret_cast<uint8_t*>(labels_select.data()), tinyply::Type::INVALID, 0);
-        if (METHOD == TIMO)
-            out2_file.add_properties_to_element("vertex", { "l_sum", "omnivariance", "eigen_entropy", "anisotropy",
-                "planarity", "linearity", "surface_variation", "sphericity", "verticality",
-                "moment_1o_1a", "moment_1o_2a", "moment_2o_1a", "moment_2o_2a" },
-                tinyply::Type::FLOAT32, features_one.size(), reinterpret_cast<uint8_t*>(features_one.data()), tinyply::Type::INVALID, 0);
-        if (METHOD == LEMAN)
-            out2_file.add_properties_to_element("vertex", { "vertical_spreads", "total_spreads", "verticality", "linearity", "planarity", "sphericity" },
-                tinyply::Type::FLOAT32, features_one.size(), reinterpret_cast<uint8_t*>(features_one.data()), tinyply::Type::INVALID, 0);
-        out2_file.write(out2, binary);
-        out2.close();
+        {
+            out_file.add_properties_to_element("feature", { "class" }, tinyply::Type::UINT32, classes_select.size(),
+                reinterpret_cast<uint8_t*>(classes_select.data()), tinyply::Type::INVALID, 0);
+
+            out_file.add_properties_to_element("feature", { "entries" }, tinyply::Type::FLOAT32, features.size(),
+                reinterpret_cast<uint8_t*>(features.data()), tinyply::Type::UINT32, FEATURE_N);
+            out_file.write(out, binary);
+            out.close();
+        }
+        {
+            std::ofstream out2(std::string("check_") + output_name, binary ? std::ios::binary : 0);
+            tinyply::PlyFile out2_file;
+
+            out2_file.add_properties_to_element("vertex", { "x", "y", "z" }, tinyply::Type::FLOAT32, pts_select.size() * 3,
+                reinterpret_cast<uint8_t*>(pts_select.data()), tinyply::Type::INVALID, 0);
+            out2_file.add_properties_to_element("feature", { "class" }, tinyply::Type::UINT32, classes_select.size(),
+                reinterpret_cast<uint8_t*>(classes_select.data()), tinyply::Type::INVALID, 0);
+            if (METHOD == TIMO)
+                out2_file.add_properties_to_element("vertex", { "l_sum", "omnivariance", "eigen_entropy", "anisotropy",
+                    "planarity", "linearity", "surface_variation", "sphericity", "verticality",
+                    "moment_1o_1a", "moment_1o_2a", "moment_2o_1a", "moment_2o_2a" },
+                    tinyply::Type::FLOAT32, features_one.size(), reinterpret_cast<uint8_t*>(features_one.data()), tinyply::Type::INVALID, 0);
+            if (METHOD == LEMAN)
+                out2_file.add_properties_to_element("vertex", { "vertical_spreads", "total_spreads", "verticality", "linearity", "planarity", "sphericity" },
+                    tinyply::Type::FLOAT32, features_one.size(), reinterpret_cast<uint8_t*>(features_one.data()), tinyply::Type::INVALID, 0);
+            out2_file.write(out2, binary);
+            out2.close();
+        }
     }
 }
 
 //#pragma optimize( "", on )   
+std::map<int, int> get_class_mapping_for_Paris_rue_Madame() {
+    std::map<int, int> class_map;
+    class_map[1] = 1;//Facade
+    class_map[2] = 2;//Ground
+    class_map[4] = 3;//Cars
+    class_map[10] = 4;//Moto
+    class_map[14] = 5;//Traffic signs
+    class_map[9] = 6;//Pedestrians
+    class_map[22] = 6;//Pedestrians
+    class_map[24] = 6;//Pedestrians
+    return class_map;
+}
+std::map<int, int> get_class_mapping_for_Paris_Lille_3D_data() {
+    std::map<int, int> class_map;
+    class_map[0] = 0; //unknown
+    class_map[100000000] = 0; //unknown
+    class_map[202020000] = 1; //road => ground
+    class_map[202030000] = 1; //sidewalk => ground
+    class_map[202050000] = 1; //island => ground
+    class_map[202060000] = 1; //vegetal ground => ground
+    class_map[203000000] = 2; //building
+    class_map[302020300] = 3; //bollard
+    class_map[302020400] = 4; //floor lamp
+    class_map[302020500] = 5; //traffic light
+    class_map[302020600] = 6; //traffic sign => sign
+    class_map[302020700] = 6; //signboard => sign
+    class_map[302030300] = 7; // roasting
+    class_map[302030600] = 8; //wire
+    class_map[303040000] = 9; //4+ wheels
+    class_map[303040100] = 9; //4+ wheels
+    class_map[303040200] = 9; //4+ wheels
+    class_map[303040201] = 9; //4+ wheels
+    class_map[303040202] = 9; //4+ wheels
+    class_map[303040203] = 9; //4+ wheels
+    class_map[303040204] = 9; //4+ wheels
+    class_map[303040205] = 9; //4+ wheels
+    class_map[303040206] = 9; //4+ wheels
+    class_map[303040207] = 9; //4+ wheels
+    class_map[303040208] = 9; //4+ wheels
+    class_map[303040209] = 9; //4+ wheels
+    class_map[303040300] = 9; //4+ wheels
+    class_map[303040304] = 9; //4+ wheels
+    class_map[303050500] = 10; //trash can
+    class_map[304000000] = 11; //natural
+    class_map[304020000] = 11; //tree => natural
+    class_map[304040000] = 11; //potted plant => natural
+    return class_map;
+}
 
+void class_mapping(const std::string& file, const std::string& output_name) {
+    // for Paris-Lille-3D dataset 
+    //std::map<int, int> class_map = get_class_mapping_for_Paris_Lille_3D_data();
+    std::map<int, int> class_map = get_class_mapping_for_Paris_rue_Madame();
+
+
+    std::set<int> unclassified_class;
+
+    int class_count = 0;
+    std::vector<Eigen::Vector3f> pts;
+    std::vector<int32_t> labels;
+    std::vector<int32_t> new_labels;
+    {
+        ScopeTimer t("read file", true, false);
+        read_point_cloud(file, pts, labels);
+        new_labels.resize(labels.size());
+    }
+    for (int i = 0; i < pts.size(); i++) {
+        int32_t l = labels[i];
+        auto it = class_map.find(l);
+        if (it == class_map.end()) {
+            new_labels[i] = 0;
+
+            auto it2 = unclassified_class.find(l);
+            if (it2 == unclassified_class.end()) {
+                unclassified_class.insert(l);
+                std::cout << "unclassified class : " << l << std::endl;
+            }
+        }
+        else {
+            new_labels[i] = class_map[l];
+        }
+    }
+    std::cout << class_count << " classes found" << std::endl;
+
+    {
+        std::ofstream out(std::string("class_remap_") + output_name, std::ios::binary);
+        tinyply::PlyFile out_file;
+
+        out_file.add_properties_to_element("vertex", { "x", "y", "z" }, tinyply::Type::FLOAT32, pts.size() * 3,
+            reinterpret_cast<uint8_t*>(pts.data()), tinyply::Type::INVALID, 0);
+        out_file.add_properties_to_element("vertex", { "class" }, tinyply::Type::UINT32, new_labels.size(),
+            reinterpret_cast<uint8_t*>(new_labels.data()), tinyply::Type::INVALID, 0);
+
+        out_file.write(out, true);
+        out.close();
+    }
+    {
+        std::ofstream out(std::string("class_remap_annotation_") + output_name);
+        for (auto it : class_map) {
+            out << it.first << " => " << it.second << std::endl;
+        }
+        out << "unclassified:" << std::endl;
+        for (auto it : unclassified_class) {
+            out << it << std::endl;
+        }
+        out.close();
+    }
+}
+void test() {
+
+    const int N = 8;
+    std::vector<std::vector<int>> numbers(N);
+    std::cout << N << "threads in total" << std::endl;
+#pragma omp parallel for num_threads(N)
+    for (int i = 0; i < 100; i++) {
+        int threadnum = omp_get_thread_num();
+        numbers[threadnum].push_back(i);
+    }
+
+    for (auto& v : numbers) {
+        for (auto& n : v)
+            std::cout << n << " ";
+        std::cout << std::endl;
+    }
+}
 int main(int argc, char *argv[])
 {
-    //std::string file1("D:/data/MiniChallenge/Lille_street_1.ply");
-    //std::string name1("Lille_street_1.ply");
-    //process_file(file1, name1);
+    //test();
+    //class_mapping("D:/data/rueMadame/GT_Madame1_2.ply", "madame_1.ply");
+    //class_mapping("D:/data/rueMadame/GT_Madame1_3.ply", "madame_2.ply");
 
-    std::string file1("D:/data/rueMadame/GT_Madame1_2.ply");
-    std::string name1("madame_1.ply");
+    std::string file1("D:/data/LilleStreetClass/Lille1_part1.ply");
+    std::string name1("Lille1_part1.ply");
     process_file(file1, name1);
 
-    std::string file2("D:/data/rueMadame/GT_Madame1_3.ply");
-    std::string name2("madame_2.ply");
+    std::string file2("D:/data/LilleStreetClass/Lille1_part2.ply");
+    std::string name2("Lille1_part2.ply");
     process_file(file2, name2);
     return 0;
 }
