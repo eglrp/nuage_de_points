@@ -36,12 +36,21 @@ const double PI = 3.141592653589793238463;
 
 void read_point_cloud(const std::string & filename, std::vector<Eigen::Vector3f>& verts, std::vector<int32_t>& ls)
 {
-    std::ifstream ss(filename, std::ios::binary);
-
-    if (ss.fail())
+    std::stringstream ss;
     {
-        throw std::runtime_error("failed to open " + filename);
+        ScopeTimer t("Read file to memory", true, false);
+        std::ifstream f(filename, std::ios::binary);
+        if (f.fail())
+        {
+            throw std::runtime_error("failed to open " + filename);
+        }
+
+        ss << f.rdbuf();
+
+        f.close();
     }
+
+
 
     tinyply::PlyFile file;
 
@@ -84,12 +93,11 @@ void read_point_cloud(const std::string & filename, std::vector<Eigen::Vector3f>
     }
 
 
-    timepoint before = now();
-    file.read(ss);
-    timepoint after = now();
+    {
+        ScopeTimer t("Parsing", true, false);
+        file.read(ss);
+    }
 
-    // Good place to put a breakpoint!
-    std::cout << "Parsing took " << difference_millis(before, after) << " ms: " << std::endl;
     if (vertices) std::cout << "\tRead " << vertices->count << " total vertices " << std::endl;
     if (classes) std::cout << "\tRead " << classes->count << " total labels " << std::endl;
 
@@ -145,7 +153,7 @@ void local_pca(std::vector<Eigen::Vector3f>& pts, Eigen::Matrix3f& evec, Eigen::
 }
 
 enum Method { TIMO, LEMAN, LEMAN_2 };
-const Method METHOD = LEMAN_2;
+const Method METHOD = TIMO;
 
 template <Method method>
 struct MethodTraits
@@ -185,7 +193,7 @@ struct MethodTraits<LEMAN>
         return{ 0.1f, 0.3f, 0.9f, 2.7f };
     }
     static std::vector<float> grid_size() {
-        return{ 0.025f, 0.075f, 0.225f, 0.675f };
+        return{ 0.05f, 0.15f, 0.45f, 1.35f };
     }
     static ShapeFeature compute_features_with_eigen(
         const Eigen::Vector3f& p, const std::vector<Eigen::Vector3f>& nbs,
@@ -193,10 +201,10 @@ struct MethodTraits<LEMAN>
         float l1 = evar[2];
         float l2 = evar[1];
         float l3 = evar[0];
-        float denom = l1 + l2 + l3 + 1e-6f;
-        l1 /= denom;
-        l2 /= denom;
-        l3 /= denom;
+        float eigensum = l1 + l2 + l3 + 1e-6f;
+        l1 /= eigensum;
+        l2 /= eigensum;
+        l3 /= eigensum;
 
         Eigen::Vector3f normal = evec.col(0);
         Eigen::Vector3f ez(0., 0., 1.);
@@ -215,8 +223,8 @@ struct MethodTraits<LEMAN>
             v0[2] * v0[2] * evar[0] +
             v1[2] * v1[2] * evar[1] +
             v2[2] * v2[2] * evar[2];
-        vertical_spreads /= denom;
-        float total_spreads = denom / radius / radius;
+        vertical_spreads /= eigensum;
+        float total_spreads = eigensum / radius / radius;
 
         if (!std::isfinite(vertical_spreads)) throw "error";
         if (!std::isfinite(total_spreads)) throw "error";
@@ -245,7 +253,7 @@ struct MethodTraits<LEMAN_2>
         return{ 0.1f, 0.3f, 0.9f, 2.7f };
     }
     static std::vector<float> grid_size() {
-        return{ 0.025f, 0.075f, 0.225f, 0.675f };
+        return{ 0.05f, 0.15f, 0.45f, 1.35f };
     }
     static ShapeFeature compute_features_with_eigen(
         const Eigen::Vector3f& p, const std::vector<Eigen::Vector3f>& nbs,
@@ -253,20 +261,20 @@ struct MethodTraits<LEMAN_2>
         float l1 = evar[2];
         float l2 = evar[1];
         float l3 = evar[0];
-        float denom = l1 + l2 + l3 + 1e-6f;
-        l1 /= denom;
-        l2 /= denom;
-        l3 /= denom;
+        float eigensum = l1 + l2 + l3 + 1e-6f;
+        l1 /= eigensum;
+        l2 /= eigensum;
+        l3 /= eigensum;
 
         Eigen::Vector3f normal = evec.col(0);
         Eigen::Vector3f ez(0., 0., 1.);
         float verticality = 2. * std::asin(std::min(std::abs(normal.dot(ez)), 1.0f)) / PI;
-        float total_spreads = denom / radius / radius;
+        float eigensum_normalized = eigensum / radius / radius;
 
-        if (!std::isfinite(total_spreads)) throw "error";
+        if (!std::isfinite(eigensum_normalized)) throw "error";
         if (!std::isfinite(verticality)) throw "error";
 
-        return{ total_spreads, l1, l2, l3, verticality };
+        return{ eigensum_normalized, l1, l2, l3, verticality };
     }
 };
 
@@ -295,11 +303,11 @@ struct MethodTraits<TIMO>
         float l2 = evar[1];
         float l3 = evar[0];
         l3 = std::max(0.f, l3);
-        float l_sum = l1 + l2 + l3 + 1e-6f;
+        float eigensum = l1 + l2 + l3 + 1e-6f;
 
-        l1 /= l_sum;
-        l2 /= l_sum;
-        l3 /= l_sum;
+        l1 /= eigensum;
+        l2 /= eigensum;
+        l3 /= eigensum;
 
         float eigen_entropy = -l1*std::log(l1) - l2*std::log(l2) - l3*std::log(l3 + 1e-6f);
         float omnivariance = std::cbrt(l1*l2*l3);
@@ -344,7 +352,7 @@ struct MethodTraits<TIMO>
         if (!std::isfinite(anisotropy)) throw "error";
         if (!std::isfinite(surface_variation)) throw "error";
 
-        return{ l_sum, omnivariance, eigen_entropy, anisotropy,
+        return{ eigensum, omnivariance, eigen_entropy, anisotropy,
             planarity, linearity, surface_variation, sphericity, verticality,
             moment_1o_1a, moment_1o_2a, moment_2o_1a, moment_2o_2a };
     }
@@ -423,7 +431,7 @@ void process_file(const std::string& file, const std::string& output_name) {
     std::mt19937 g(rd());
 
     //read file
-    const int max_sample_per_class = 10000;
+    const int max_sample_per_class = 20000;
     std::vector<Eigen::Vector3f> pts;
     std::vector<int32_t> classes;
     {
@@ -620,6 +628,9 @@ void process_file(const std::string& file, const std::string& output_name) {
             if (METHOD == LEMAN)
                 out2_file.add_properties_to_element("vertex", { "vertical_spreads", "total_spreads", "verticality", "linearity", "planarity", "sphericity" },
                     tinyply::Type::FLOAT32, features_one.size(), reinterpret_cast<uint8_t*>(features_one.data()), tinyply::Type::INVALID, 0);
+            if (METHOD == LEMAN_2)
+                out2_file.add_properties_to_element("vertex", { "eigensum_normalized", "l1", "l2", "l3", "verticality" },
+                    tinyply::Type::FLOAT32, features_one.size(), reinterpret_cast<uint8_t*>(features_one.data()), tinyply::Type::INVALID, 0);
             out2_file.write(out2, binary);
             out2.close();
         }
@@ -735,35 +746,20 @@ void class_mapping(const std::string& file, const std::string& output_name) {
         out.close();
     }
 }
-void test() {
 
-    const int N = 8;
-    std::vector<std::vector<int>> numbers(N);
-    std::cout << N << "threads in total" << std::endl;
-#pragma omp parallel for num_threads(N)
-    for (int i = 0; i < 100; i++) {
-        int threadnum = omp_get_thread_num();
-        numbers[threadnum].push_back(i);
-    }
 
-    for (auto& v : numbers) {
-        for (auto& n : v)
-            std::cout << n << " ";
-        std::cout << std::endl;
-    }
-}
+
 int main(int argc, char *argv[])
 {
-    //test();
     //class_mapping("D:/data/rueMadame/GT_Madame1_2.ply", "madame_1.ply");
     //class_mapping("D:/data/rueMadame/GT_Madame1_3.ply", "madame_2.ply");
 
-    std::string file1("D:/data/LilleStreetClass/Lille1_part1.ply");
-    std::string name1("Lille1_part1.ply");
+    std::string file1("D:/data/LilleStreetClass/Lille1_partA.ply");
+    std::string name1("Lille1_partA.ply");
     process_file(file1, name1);
 
-    std::string file2("D:/data/LilleStreetClass/Lille1_part2.ply");
-    std::string name2("Lille1_part2.ply");
+    std::string file2("D:/data/LilleStreetClass/Lille1_partB.ply");
+    std::string name2("Lille1_partB.ply");
     process_file(file2, name2);
     return 0;
 }
