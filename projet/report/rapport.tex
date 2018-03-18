@@ -1,0 +1,163 @@
+\documentclass{article}
+\usepackage[utf8]{inputenc}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{amsbsy}
+\usepackage{mathrsfs}
+\usepackage{appendix}
+\usepackage{amsthm}
+\usepackage{bbold}
+\usepackage{epstopdf}
+\usepackage{stmaryrd}
+\usepackage[]{algorithm2e}
+\usepackage{multirow}
+\title{Project report for NPM3D : \\PCA based 3D point cloud classification}
+\author{Leman FENG\\ Email: flm8620@gmail.com\\Website: lemanfeng.com}
+
+\begin{document}
+\maketitle
+\section{Introduction}
+After the mini-challenge of 3d point cloud classification in course, I decided to explore more on the subject of PCA based 3D points cloud classification. I read two articles \cite{weinmann2015} \cite{hackel2016fast} which present the state-of-art methods using PCA on neighborhoods. I will first summarize the two articles, then give some critical points of view, followed with a reproduction of method \cite{hackel2016fast} on a new dataset. At last I will give some new ideas on this subject together with test on a dataset.
+
+\section{Article Summary}
+The first article \cite{weinmann2015} provide a comprehensive comparison of different approaches in three aspects: neighborhood selection, feature design and classifier. And they proposed a better way of neighborhood selection. The second article \cite{hackel2016fast} focused on proposing a new pyramid grid sub-sampling and a new feature design. I will summarize the two article following the three aspects and their result on datasets.
+\subsection{Neighborhood selection}
+To tell the class of one point, the most natural way is to look at its neighborhoods. There are two ways of neighborhood selection : radius search and $k$ nearest neighbors. \cite{weinmann2015} and \cite{hackel2016fast} give different approaches. 
+
+The first article \cite{weinmann2015} wants to find a optimal sizing of neighborhoods in the sense that the selection gives the most information on PCA features. They use $k$-NN from $k=10$ to $100$ and find the best $k$ maximizing the eigen-entropy:
+\begin{equation}
+E_\lambda = -\sum_{i=1}^{3} e_i \log e_i
+\end{equation}
+where $e_i = \lambda_i/\sum_{j=1}^{3} \lambda_j$.
+
+And they use the best $k$ as the best and only scale to generate PCA features. They shown in tests that their eigen-entropy criterion gives better result in most of the time compared to different fixed $k$-NN and other optimal size criteria.
+
+The second article \cite{hackel2016fast} use multi-scale neighborhood with $k$-NN. They firstly subsample the point cloud by voxel grids with grid sizing varying from 0.025m to 6.4m, each time multiplied by a factor of 2, totally 9 scales. They hope the sub-sampling can skip dense points for acquiring invariance to density. And this sub-sampling can help reduce the neighborhood querying time.
+
+For each scale, they then fix $k=10$ for $k$-NN and do PCA on these 10 points.
+\subsection{Feature design}
+Most of features selected in two articles are based on eigenvalue and eigenvector of the PCA on neighborhoods. 
+The second article \cite{hackel2016fast} uses 16 features. Shown in Table \ref{table:1}.
+\begin{table}[h!]
+	\centering
+	\begin{tabular}{|c | c | c |} 
+		\hline
+		\multirow{9}{*}{Covariance}
+		& Sum & $\sum_{i=1}^{3}\lambda_i$ \\ 
+		& Omnivariance & $(\lambda_1 \lambda_2 \lambda_3)^{\frac{1}{3}}$ \\ 
+		& Eigenentropy & $-\sum_{i=1}^{3}\lambda_i \log \lambda_i$ \\ 
+		& Anisotropy & $(\lambda_1-\lambda_3)/\lambda_1$ \\ 
+		& Planarity & $(\lambda_2-\lambda_3)/\lambda_1$ \\ 
+		& Linearity & $(\lambda_1-\lambda_2)/\lambda_1$ \\ 
+		& Surface Variation & $\lambda_3/(\lambda_1+\lambda_2+\lambda_3)$ \\ 
+		& Sphericity & $\lambda_3/\lambda_1$ \\ 
+		& Verticality & $1-|\langle [0,0,1], \mathbf{e}_1\rangle|$ \\ 
+		\hline
+		\multirow{4}{*}{Moment}
+		& 1\textsuperscript{st} order, 1\textsuperscript{st} axis  & $\sum_{i\in \mathcal{N}}\langle \mathbf{p}_i-\mathbf{p}, \mathbf{e}_1\rangle$ \\ 
+		& 1\textsuperscript{st} order, 2\textsuperscript{nd} axis & $\sum_{i\in \mathcal{N}}\langle \mathbf{p}_i-\mathbf{p}, \mathbf{e}_2\rangle$ \\ 
+		& 2\textsuperscript{nd} order, 1\textsuperscript{st} axis & $\sum_{i\in \mathcal{N}}\langle \mathbf{p}_i-\mathbf{p}, \mathbf{e}_1\rangle^2$ \\ 
+		& 2\textsuperscript{nd} order, 2\textsuperscript{nd} axis & $\sum_{i\in \mathcal{N}}\langle \mathbf{p}_i-\mathbf{p}, \mathbf{e}_2\rangle^2$ \\ 
+		\hline
+		\multirow{4}{*}{Height}
+		& Vertical range & $z_{\text{max}}-z_{\text{min}}$ \\ 
+		& Height below & $z-z_{\text{min}}$ \\ 
+		& Height above & $z_{\text{max}}-z$ \\ 
+		\hline
+	\end{tabular}
+	\caption{16 features used in \cite{hackel2016fast}}
+	\label{table:1}
+\end{table}
+Most features of ``covariance'' in Table \ref{table:1} are also tested in \cite{weinmann2015}. The four ``Moment'' features take the neighborhood's offset into account, which can increase precision for boundary points, according to \cite{hackel2016fast}.
+
+The ``Height'' features are measured in a cylindrical neighborhood. And there is a $5\%$ drop in precision if they are not used, according to \cite{hackel2016fast}.
+
+In the first article \cite{weinmann2015}, they also tested other non-PCA feature such as 2D features. And from the test in \cite{weinmann2015}, we can conclude basically more features you use, better precision you get. 
+\subsection{Classification}
+\cite{weinmann2015} shown that Random Forest has good performance in most of time. And for this reason, \cite{hackel2016fast} only test on Random Forest.
+
+\subsection{Dataset \& Result}
+The first article \cite{weinmann2015} used the \textit{Oakland 3D Point Cloud Dataset} and \textit{Paris-rue-Madame database}. And the second article used \textit{Paris-rue-Madame database} and \textit{Paris-Rue-Cassette database}.
+
+\textit{Oakland 3D Point Cloud Dataset} is already separated in training, validation and test sets. While \textit{Paris-rue-Madame database} is not separated. For \textit{Paris-rue-Madame database} and \textit{Paris-Rue-Cassette database}, both articles conduct a class re-balancing and randomly select 1000 points per class as training set, and rest points for test set.
+
+\section{Criticism}
+\subsection{Neighborhood selection}\label{sec:nb}
+The selection of neighborhood is always the same story, either by querying points in a ball(or $k$-NN) with optimal radius(or $k$), or multiple balls with fixed sizes stacked together.
+
+I think if the scale of dataset is known, such as 1 unit = 1 meter (and for most cases, it is. Because most data are laser scanned), then fixed radius querying makes sense because each type of object always gives the most useful information on a specific scale, for example, cars are always several meters long, pedestrians are always 1-2 meters tall.
+
+But I don't think the multi-scaled concentric balls is the optimal solution. Most 3D features are related to PCA. The problem of PCA is that it basically represents the best ellipsoid that approximates your neighborhoods. If the ball is large, it covers more points, but an approximated ellipsoid is too abstract for a large coverage. And if the ball is small, PCA is a good local descriptor for shapes like line, plane, etc. But a small ball cover few points. There is always a dilemma of scale and detail.
+
+\subsection{Feature design \& Classification}
+\subsubsection{Unclear definition}
+In both article, they all said three eigenvalues should be normalized such that the sum is one. But then they introduced the eigensum feature $\Sigma_\lambda = \sum_{i=1}^{3} \lambda_3$ AFTER this normalization. But they also use the eigenentropy term as a feature with the same symbol of eigenvalue as eigensum. For my reproduction, I will take eigensum as the sum of raw eigenvalues and use the normalized eigenvalues for all rest features.
+
+\subsubsection{Hand craft features}
+It seems that the key of point cloud classification is the design of your feature. More delicately crafted features you get, better the result is. I don't think this is the right way to go. PCA on neighborhood only provide 6 degrees of freedom, 3 for eigenvalues, 3 for a orthogonal basis of three eigenvectors. \cite{hackel2016fast} used 9 PCA features, and 8 of them only depend on eigenvalues. Which means you need to map your 3 eigenvalues into a higher dimension space that can make your random forest happy. 
+
+I think the problem is, random forest is sensible to your feature design. The only thing a decision tree can do is to divide recursively your data by one feature value each time. So it's hard for a decision tree, given raw eigenvalues, to decide according to some function of them, for example, the linearity in function of eigenvalues: $L(\lambda_1,\lambda_2,\lambda_3) = (\lambda_1-\lambda_2)/\lambda_1$.
+
+Why not let the machine to learn the best descriptors, instead of those hand craft features? Just like the Convolutional Neural Networks that can learn basic descriptors on images in the first several layers.
+
+Besides, I don't think using the height information of points is a good idea. This features prevents translation invariance. Yes, most dataset has flat ground, and most pedestrians and cars are always on the ground. What about a car on a bridge going above a building ? The correct logic should bases on the space relationship. For example, a car-like object on a flat surface should be a car. A vertical cylinder under fuzzy points should be a tree, not a lamp-post. So for the following test, I deleted height features, which will decrease the precision by $5\%$ \cite{hackel2016fast}, according to their test.
+
+\subsection{Dataset \& Result}
+I don't agree with the way by which both article generate data from the \textit{Paris-rue-Madame database} and \textit{Paris-Rue-Cassette database}. They pick 1000 points per class randomly from point cloud, and the rest points become the test data. You cannot create training data and test data from the same point cloud. Simply because many testing points will have some neighbors belonging to 1000 points for training, and features for neighboring points are very similar. I'm afraid the $97\%$ overall precision in \cite{hackel2016fast} is just a over-fitting on training set.
+
+\section{New ideas}
+\subsection{Neighborhood selection}
+\subsubsection{Voxel grid subsampling}
+I will use the multi-scale voxel grid subsampling as \cite{hackel2016fast}, for the efficiency of querying and for a uniform density on point clouds. But I will use radius querying instead of $k$-NN because I think a fixed radius can well capture the geometry at specific scale. 
+
+I adapt the size of voxel grid to the radius of query. In practice, I take voxel grid size as $\frac{1}{4}$ of the radius.
+
+\subsubsection{Neighborhood's Neighborhood}
+To solve the dilemma mentioned in Section \ref{sec:nb}, I propose a new method called Neighborhood's Neighborhood. Instead of querying only by one ball centered at the point $\mathbf{p}$ to classify, I query 6 more balls surrounding the center ball : 
+
+Let $\{\mathbf{e}_i\}_{i}$ be the three eigenvectors from result of PCA of the center ball, corresponding to three eigenvalues: $\{\lambda_i\}_{i}$ and $\lambda_1 \geq \lambda_2 \geq \lambda_3$. Let $R$ be the radius of the center ball. Then the 6 surrounding balls are centered at:
+\begin{equation}
+\mathbf{p}\pm \mu R \mathbf{e}_i,\quad i=1,2,3
+\end{equation}
+and they have the same radius as the center ball. In practice, I take $\mu=1.5$
+
+I use in total 4 scales, from 0.1m to 2.7m with a multiplication factor of 3 instead of 2 because with surrounding balls, each scale covers more points.
+
+\subsection{Feature design}
+I don't want to design any complicated features manually. I want to provide directly raw features from PCA, and then feed it into a convolutional neural network.
+
+Let's define $\{\lambda_i\}_{i}$ and $\lambda_1 \geq \lambda_2 \geq \lambda_3$ as the raw eigenvalues from PCA. And $\Sigma_\lambda = \sum_{j=1}^{3}\lambda_j$ And $l_i = \lambda_i / \Sigma_\lambda$ as normalized eigenvalues.
+
+Recall that $\Sigma_\lambda$ are actually the sum of squared distance to centroid of all points. So if we want to include $\Sigma_\lambda$ as a raw feature, it's better to normalize it as ${\Sigma_\lambda}/{R^2}$
+
+For eigenvectors, the only feature I want to take is the verticality : 
+
+$$\frac{2\arcsin(|\langle [0,0,1], \mathbf{e}_1\rangle|)}{\pi} \in [0, 1]$$
+
+At last, for all balls at the same scale, I add the "density ratio to center ball" which is the ratio between number of neighbors $N$ in ball compared to which in center ball $N_c$. For consistency, this value is set to 1.0 for center ball.
+
+For summary, the raw features I take are : 
+\begin{table}[h!]
+	\centering
+	\begin{tabular}{| c | c |} 
+		\hline
+		Density ratio to center ball & $N / N_c$\\
+		\hline
+		Normalized eigensum & ${\Sigma_\lambda}/{R^2}$ \\ 
+		\hline
+		\multirow{3}{*}{Normalized Eigenvalues}
+		& $\lambda_1/\Sigma_\lambda$ \\
+		& $\lambda_2/\Sigma_\lambda$ \\
+		& $\lambda_3/\Sigma_\lambda$ \\
+		\hline
+		Verticality & $2\arcsin(|\langle [0,0,1], \mathbf{e}_1\rangle|) / \pi$\\
+		\hline
+	\end{tabular}
+	\caption{features}
+	\label{table:2}
+\end{table}
+
+\bibliographystyle{unsrt}
+\bibliography{sample}
+\end{document}
