@@ -13,6 +13,7 @@
 \usepackage[]{algorithm2e}
 \usepackage{multirow}
 \usepackage{xcolor}
+\usepackage{hyperref}
 \newcommand{\red}[1]{\textcolor{red}{#1}}
 \title{Project report for NPM3D : \\PCA based 3D point cloud classification}
 \author{Leman FENG\\ Email: flm8620@gmail.com\\Website: lemanfeng.com}
@@ -116,13 +117,20 @@ I will use the multi-scale voxel grid subsampling as \cite{hackel2016fast}, for 
 I adapt the size of voxel grid to the radius of query. In practice, I take voxel grid size as $\frac{1}{4}$ of the radius.
 
 \subsubsection{Neighborhood's Neighborhood}
-To solve the dilemma mentioned in Section \ref{sec:nb}, I propose a new method called Neighborhood's Neighborhood. Instead of querying only by one ball centered at the point $\mathbf{p}$ to classify, I query 6 more balls surrounding the center ball : 
+To solve the dilemma mentioned in Section \ref{sec:nb}, I propose a new method called \textit{Neighborhood's Neighborhood}. Instead of querying only by one ball centered at the point $\mathbf{p}$ to classify, I query 6 more balls surrounding the center ball : 
 
 Let $\{\mathbf{e}_i\}_{i}$ be the three eigenvectors from result of PCA of the center ball, corresponding to three eigenvalues: $\{\lambda_i\}_{i}$ and $\lambda_1 \geq \lambda_2 \geq \lambda_3$. Let $R$ be the radius of the center ball. Then the 6 surrounding balls are centered at:
 \begin{equation}
 \mathbf{p}\pm \mu R \mathbf{e}_i,\quad i=1,2,3
 \end{equation}
-and they have the same radius as the center ball. In practice, I take $\mu=1.5$
+and they have the same radius as the center ball. In practice, I take $\mu=1.5$. A example in 2D is shown in Fig \ref{fig:nbnb}.
+
+\begin{figure}[h]
+	\centering
+	\includegraphics[width=5cm]{nbnb.png}
+	\caption{Neighborhood's neighborhood}
+	\label{fig:nbnb}
+\end{figure}
 
 I use in total 4 scales, from 0.1m to 2.7m with a multiplication factor of 3 instead of 2 because with surrounding balls, each scale covers more points.
 
@@ -160,11 +168,15 @@ For summary, the raw features I take are :
 	\label{table:2}
 \end{table}
 
-There are 4 scales, 7 balls for each scale and 6 features for each ball. In total 168 features.
+There are 4 scales, 7 balls for each scale and 6 features for each ball. In total 168 features. Compared to method in \cite{hackel2016fast}, there are $k$-NN in 9 scales from 0.025m to 6.25m, and 13 features for each scale, in total 117 features. 
 
 
 \subsection{Classification}
-I test three different classifiers, the first one is random forest, the second one is Multi-Layer Percepton. Then I propose a convolutional neural network as following:
+I test three different classifiers, the first one is random forest. I choose 50 trees and 30 as depth, as recommended in \cite{hackel2016fast}.
+
+The second one is Multi-Layer Percepton. I use 2 layers and the intermediate layer has 30 units. 
+
+I propose a convolutional neural network as the third classifier:
 
 \begin{figure}[h]
 	\centering
@@ -177,31 +189,17 @@ Note ``n\_scale'', ``n\_ball'' and ``n\_feature'' as the number of scale, number
 
 The input is a matrix with size (n\_scale*n\_ball, n\_feature). Each row is a feature vector for one ball. 
 
-Then I apply a small MLP on all feature vectors to map the feature space to another space with dimension ``n3'' (Layer ``L1''). The weight of this MLP is shared among all features, which is different from traditional MLP. This convolutional-like small MLP let the network to learn the best function of features.
+Then I apply a small MLP on all feature vectors to map the feature space to another space with dimension ``n2'' (Layer ``L1''). The weight of this MLP is shared among all features, which is different from traditional MLP. This convolutional-like small MLP let the network to learn the best function of features.
 
 Layer ``L1'' is reshaped to ``L2'', a 3D tensor of size (n\_scale, n\_ball, n3). Each floor of ``L2'' represent features in all balls at same scale.
 
-A convolution is apply to ``L2'' with kernel size (1, n3, n\_ball), and in total m1 kernels. The idea of convolution is that a useful MLP for one scale are probably useful for other scales. For each scale, this MLP maps all features into a vector of length m3.
+A convolution is apply to ``L2'' with kernel size (1, n3, n\_ball), and in total m1 kernels. The idea of convolution is that a useful MLP for one scale are probably useful for other scales. For each scale, this MLP maps all features into a vector of length m1.
 
-Finally, ``L3'' is full connected to a flatten layer ``L4'', which is then full connected to the output.
-
-In practice, the parameters of layer structures is shown in Table \ref{table:3}
-
-\begin{table}[h!]
-	\centering
-	\begin{tabular}{|c|c|c|c|c|} 
-		\hline
-		n1 & n2 & n3 & m1 & L4\\
-		\hline
-		? & ? & ? & ? & ?\\
-		\hline
-	\end{tabular}
-	\caption{Parameters of network structure}
-	\label{table:3}
-\end{table}
+Finally, ``L3'' is full connected to the output.
 
 
-\subsection{Dataset}
+
+\subsection{Dataset} \label{sec:dataset}
 \begin{figure}[h]
 	\centering
 	\includegraphics[width=12cm]{Lille1_cut.png}
@@ -275,49 +273,89 @@ I use data part A for training and part B for testing. In part A, I pick as most
 		\hline
 		& ground & building & bollard & floor lamp & traffic light & sign & roasting & wire & 4+ wheels & trash can & natural\\
 		\hline
-		Training & 10000 & 10000 & 10000 & 10000 & 10000 & 10000 & 10000 &  1973 & 10000 & 10000 & 10000 \\
+		Training & 20000 & 20000 & 17540 & 20000 & 17835 & 20000 & 20000 &  1973 & 20000 & 20000 & 20000 \\
 		\hline
 		Testing  & 20000 & 20000 & 17256 & 20000 &  7987 & 20000 & 20000 & 12211 & 20000 & 20000 & 20000 \\
 		\hline
 	\end{tabular}
 	}
-	\caption{Remapping of class}
+	\caption{Number of samples per class}
 	\label{table:samples}
 \end{table}
 
-I tested the method in Section \cite{hackel2016fast}, but I removed all height features for reason stated in \ref{sec:features}. So there are balls in 9 scales from 0.025m to 6.25m, and 13 features for each scale, in total 117 features. The result is shown in Table \ref{table:timo}.
+I tested both the method in \cite{hackel2016fast} and my \textit{Neighborhood's Neighborhood} method. But I removed all height features in \cite{hackel2016fast} for reason stated in Section \ref{sec:features}. 
 
-For MLP, I use \red{?} layers with width of \red{?}. There are \red{?} parameters in my MLP and \red{?} parameters for my CNN.
+Since the number of features are different in two methods, I tried many times and picked the best structure I can get for each method. It seems that the method in \cite{hackel2016fast} suffers easily from overfitting than my method. For this reason, I changed MLP to Single Layer Perceptron for method in \cite{hackel2016fast}, and I use only one convolutional layer for CNN. The structures of CNN for two methods are described by parameters and are shown in Table \ref{table:param}. 
+
+The training curves for two Neural Networks and for the two methods are shown in Fig \ref{fig:timo_curve} and Fig \ref{fig:leman_curve}.
+
+
+\begin{table}[h!]
+	\centering
+	\makebox[\textwidth][c]{
+		\begin{tabular}{|c|c|c|c|c|c|c|} 
+			\hline
+			& \multicolumn{4}{|c|}{CNN} & \multicolumn{2}{|c|}{MLP}\\
+			\hline 
+			& n1 & n2 & m1 & parameters & layers & parameters \\
+			\hline
+			method in \cite{hackel2016fast} & 6 & (removed) & (removed) & 744 & Single layer & 1416 \\
+			\hline
+			My method & 30 & 10 & 6 & 1246 & two layers, width = 30 & 5542\\
+			\hline
+		\end{tabular}
+	}
+	\caption{Parameters of convolutional neural network structure}
+	\label{table:param}
+\end{table}
+
+The code is available online at \href{https://github.com/flm8620/nuage_de_points/tree/master/projet}{my github}.
+
+Feature generation is coded in C++ in the folder ``src''. Training and testing is coded in python in folder ``code''.
+
+\begin{figure}[h]
+	\centering
+	\includegraphics[width=8cm]{Figure_timo.png}
+	\caption{Training curve of method in \cite{hackel2016fast}}
+	\label{fig:timo_curve}
+\end{figure}
+
+\begin{figure}[h]
+	\centering
+	\includegraphics[width=8cm]{Figure_leman.png}
+	\caption{Training curve of my method \textit{Neighborhood's Neighborhood}}
+	\label{fig:leman_curve}
+\end{figure}
 
 \begin{table}[h!]
 	\centering
 	\makebox[\textwidth][c]{
 		\begin{tabular}{|c|c c c|c c c|c c c|} 
 			\hline
-			 & \multicolumn{3}{|c|}{Random forest} & \multicolumn{3}{|c|}{MLP} & \multicolumn{3}{|c|}{Convolutional}\\
+			 & \multicolumn{3}{|c|}{Random forest} & \multicolumn{3}{|c|}{Single Layer Percepton} & \multicolumn{3}{|c|}{Convolutional}\\
 			\hline
 			 & precision & recall & f1-score & precision & recall & f1-score & precision & recall & f1-score\\
 			\hline
-ground			& 96.1 & 96.3 & 96.2 & 93.4 & 95.2 & 94.3 & 94.2 & 95.1 & 94.6 \\
-building		& 53.2 & 89.9 & 66.8 & 67.3 & 83.0 & 74.3 & 67.7 & 84.2 & 75.1 \\
-bollard			& 93.5 & 50.2 & 65.3 & 84.5 & 57.2 & 68.2 & 87.9 & 77.2 & 82.2 \\
-floor lamp		& 46.0 & 77.7 & 57.8 & 46.6 & 71.2 & 56.4 & 65.6 & 71.1 & 68.2 \\
-traffic light	& 71.4 & 03.7 & 07.0 & 62.0 & 23.5 & 34.1 & 78.3 & 59.5 & 67.6 \\
-sign			& 32.9 & 12.6 & 18.2 & 23.9 & 24.3 & 24.1 & 32.0 & 38.4 & 34.9 \\
-roasting		& 39.5 & 56.5 & 46.5 & 47.5 & 68.2 & 56.0 & 53.3 & 50.8 & 52.1 \\
-wire			& 99.3 & 38.1 & 55.0 & 87.6 & 43.7 & 58.3 & 88.1 & 62.0 & 72.8 \\
-4+ wheels		& 69.0 & 88.8 & 77.7 & 75.1 & 73.9 & 74.5 & 78.3 & 78.4 & 78.3 \\
-trash can		& 45.9 & 26.5 & 33.6 & 47.3 & 45.1 & 46.2 & 54.9 & 53.7 & 54.3 \\
-natural			& 41.3 & 81.5 & 54.8 & 55.5 & 70.4 & 62.0 & 59.1 & 70.1 & 64.1 \\
-                                                                        
-avg / total		& 62.6 & 56.5 & 52.6 & 62.8 & 59.6 & 58.9 & 69.0 & 67.3 & 67.7 \\
+ground			& 93.8 & 96.9 & 95.4 & 95.3 & 95.0 & 95.1 & 95.3 & 95.1 & 95.2 \\
+building		& 48.1 & 91.2 & 62.9 & 74.2 & 81.1 & 77.5 & 75.2 & 80.4 & 77.7 \\
+bollard			& 95.5 & 48.7 & 64.5 & 84.5 & 62.9 & 72.1 & 84.7 & 74.7 & 79.4 \\
+floor lamp		& 47.1 & 74.4 & 57.7 & 56.3 & 71.4 & 62.9 & 54.4 & 73.7 & 62.6 \\
+traffic light	& 70.4 & 02.7 & 05.2 & 72.4 & 59.0 & 65.0 & 72.6 & 55.4 & 62.8 \\
+sign			& 26.7 & 10.4 & 14.9 & 32.7 & 27.3 & 29.8 & 34.1 & 29.7 & 31.8 \\
+roasting		& 36.5 & 49.3 & 42.0 & 48.4 & 63.7 & 55.0 & 47.1 & 60.9 & 53.1 \\
+wire			& 99.4 & 32.9 & 49.5 & 86.5 & 48.4 & 62.1 & 81.2 & 58.3 & 67.8 \\
+4+ wheels		& 70.8 & 88.1 & 78.5 & 78.5 & 76.5 & 77.5 & 80.8 & 74.0 & 77.2 \\
+trash can		& 49.1 & 23.1 & 31.4 & 48.3 & 45.7 & 47.0 & 53.3 & 44.3 & 48.4 \\
+natural			& 38.2 & 82.4 & 52.2 & 52.0 & 75.3 & 61.5 & 54.4 & 70.9 & 61.6 \\
+\hline                                                      
+avg / total		& 61.4 & 54.6 & 50.4 & 66.3 & 64.2 & 64.1 & \textbf{66.6} & \textbf{65.2} & \textbf{65.2} \\
 			\hline
 			\end{tabular}
 	}
 	\caption{Test Result with method \cite{hackel2016fast}}
 	\label{table:timo}
 \end{table}
-
+  
 \begin{table}[h!]
 	\centering
 	\makebox[\textwidth][c]{
@@ -327,25 +365,65 @@ avg / total		& 62.6 & 56.5 & 52.6 & 62.8 & 59.6 & 58.9 & 69.0 & 67.3 & 67.7 \\
 			\hline
 			& precision & recall & f1-score & precision & recall & f1-score & precision & recall & f1-score\\
 			\hline
-			ground			& ??? & ???? & 96.2 & 93.4 & 95.2 & 94.3 & 94.2 & 95.1 & 94.6 \\
-			building		& ??? & ???? & 66.8 & 67.3 & 83.0 & 74.3 & 67.7 & 84.2 & 75.1 \\
-			bollard			& ??? & ???? & 65.3 & 84.5 & 57.2 & 68.2 & 87.9 & 77.2 & 82.2 \\
-			floor lamp		& ??? & ???? & 57.8 & 46.6 & 71.2 & 56.4 & 65.6 & 71.1 & 68.2 \\
-			traffic light	& ??? & ???? & 07.0 & 62.0 & 23.5 & 34.1 & 78.3 & 59.5 & 67.6 \\
-			sign			& ??? & ???? & 18.2 & 23.9 & 24.3 & 24.1 & 32.0 & 38.4 & 34.9 \\
-			roasting		& ??? & ???? & 46.5 & 47.5 & 68.2 & 56.0 & 53.3 & 50.8 & 52.1 \\
-			wire			& ??? & ???? & 55.0 & 87.6 & 43.7 & 58.3 & 88.1 & 62.0 & 72.8 \\
-			4+ wheels		& ??? & ???? & 77.7 & 75.1 & 73.9 & 74.5 & 78.3 & 78.4 & 78.3 \\
-			trash can		& ??? & ???? & 33.6 & 47.3 & 45.1 & 46.2 & 54.9 & 53.7 & 54.3 \\
-			natural			& ??? & ???? & 54.8 & 55.5 & 70.4 & 62.0 & 59.1 & 70.1 & 64.1 \\
-			
-			avg / total		& 62.6 & 56.5 & 52.6 & 62.8 & 59.6 & 58.9 & 69.0 & 67.3 & 67.7 \\
+			ground			& 98.8 & 99.0 & 98.9 & 98.1 & 98.8 & 98.4 & 98.0 & 97.7 & 97.8 \\
+			building		& 60.8 & 90.8 & 72.8 & 70.6 & 88.2 & 78.4 & 62.2 & 85.8 & 72.1 \\
+			bollard			& 94.4 & 94.1 & 94.2 & 94.7 & 87.7 & 91.1 & 89.9 & 95.7 & 92.7 \\
+			floor lamp		& 60.4 & 90.6 & 72.5 & 50.7 & 83.7 & 63.2 & 65.4 & 76.7 & 70.6 \\
+			traffic light	& 88.1 & 20.9 & 33.8 & 65.5 & 26.1 & 37.4 & 75.2 & 63.8 & 69.1 \\
+			sign			& 53.8 & 52.7 & 53.3 & 70.6 & 54.1 & 61.3 & 64.3 & 52.6 & 57.9 \\
+			roasting		& 75.5 & 59.9 & 66.8 & 70.6 & 74.6 & 72.6 & 64.9 & 64.4 & 64.6 \\
+			wire			& 99.7 & 57.9 & 73.2 & 97.2 & 61.5 & 75.3 & 89.2 & 68.9 & 77.7 \\
+			4+ wheels		& 89.5 & 95.0 & 92.2 & 91.3 & 91.6 & 91.4 & 88.8 & 89.6 & 89.2 \\
+			trash can		& 85.6 & 73.4 & 79.0 & 76.8 & 73.9 & 75.3 & 82.8 & 58.4 & 68.5 \\
+			natural			& 58.5 & 87.5 & 70.1 & 62.8 & 84.6 & 72.1 & 62.9 & 78.1 & 69.7 \\
+			\hline
+			                                                                        
+			avg / total		& \textbf{78.6} & 74.7 & 73.3 & 77.2 & 75.0 & 74.2 & 76.7 & \textbf{75.6} & \textbf{75.4} \\
 			\hline
 		\end{tabular}
 	}
 	\caption{Test Result with my method}
 	\label{table:leman}
 \end{table}
+
+\section{Conclusion}
+The method in \cite{hackel2016fast} isn't as good as they claimed ``97\%'' overall precision. Although I removed ``height'' features which they said will lead to a drop of 5\%, the overall precision didn't reached ``92\%''. The best overall precision ``66.6\%'' in my test is not given by Random forest, where I used same parameter as indicated in their paper, it's given by my new CNN.
+
+This shows that their way to generate training and testing data from the same point cloud do have problems. To confirm this, I tried again with 1000 points per class for training and 19000 points per class for testing, all points are selected randomly only from the part A of point cloud. Then I tested with Random Forest, and get the claimed ``92\%'' overall accuracy (Table \ref{table:mixtesting}). So they really overfitted their method.
+
+\begin{table}[h!]
+	\centering
+	\makebox[\textwidth][c]{
+		\begin{tabular}{|c|c c c|} 
+			\hline
+			& \multicolumn{3}{|c|}{Random forest}\\
+			\hline
+			& precision & recall & f1-score \\
+			\hline
+			ground			& 98.0 & 94.9 & 96.4 \\
+			building		& 89.9 & 84.5 & 87.1 \\
+			bollard			& 96.6 & 98.2 & 97.4 \\
+			floor lamp		& 95.0 & 96.7 & 95.8 \\
+			traffic light	& 99.4 & 98.8 & 99.1 \\
+			sign			& 95.5 & 95.5 & 95.5 \\
+			roasting		& 86.5 & 85.0 & 85.8 \\
+			wire			& 99.7 & 83.5 & 90.9 \\
+			4+ wheels		& 87.9 & 94.3 & 91.0 \\
+			trash can		& 92.2 & 98.1 & 95.1 \\
+			natural			& 74.5 & 82.5 & 78.3 \\
+			\hline                        
+			avg / total		& 92.3 & 92.0 & 92.0 \\
+			\hline
+		\end{tabular}
+	}
+	\caption{Mixing training and testing data gives the claimed results in \cite{hackel2016fast}, but actually an overfitting}
+	\label{table:mixtesting}
+\end{table}
+
+My \textit{Neighborhood's Neighborhood} method get a ``76\%-78\%'' overall precision/recall/f1-score. And from the results of two neural networks, my new CNN can achieve the same performance with fewer parameters, and no overfitting during the training, as shown in Fig \ref{fig:leman_curve}.
+
+I think non-hand-crafted, raw features combined with CNN should be the good direction to go for future researches.
+
 \bibliographystyle{unsrt}
 \bibliography{sample}
 \end{document}
