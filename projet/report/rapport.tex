@@ -207,6 +207,13 @@ Finally, ``L3'' is full connected to the output.
 	\label{fig:lill1}
 \end{figure}
 
+\begin{figure}[h]
+	\centering
+	\includegraphics[width=12cm]{part.png}
+	\caption{One part of dataset}
+	\label{fig:part}
+\end{figure}
+
 I choose the Paris-Lill1-3D dataset \cite{2017arXiv171200032R}. The dataset comes with 3 files: Lille1.ply, Lille2.ply and Paris.ply. I only use the first file.
 
 To avoid data overlapping which causes false high precision in \cite{hackel2016fast} and \cite{weinmann2015}, I demand that training data and test data shall not come from the same part of the point cloud. To assure the data separation, I cut the point cloud manually into two parts A and B as shown in Fig \ref{fig:lill1}.
